@@ -1,0 +1,1 @@
+CLASS modificado para obtener las deltas_primas
