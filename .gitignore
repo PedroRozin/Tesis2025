@@ -47,6 +47,9 @@ delta_prime_cdm.txt
 perturbations_cdm_prime.txt
 delta_prime_cdm.txt
 MCMC_num.py
+
+# Excluir class_public (submodule problemático)
+class_public/
 notebooks/compare_class_vs_class.ipynb
 notebooks/k_hor.ipynb
 python/CORRECCIONES_GRILLA.md
