@@ -43,3 +43,5 @@ my-vscode-workspace/
 
 # Archivos de configuración específicos
 test_delta_prime*.ini
+delta_prime_cdm.txt
+perturbations_cdm_prime.txt
