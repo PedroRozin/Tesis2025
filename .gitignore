@@ -1,0 +1,45 @@
+# Archivos CSV generados
+*.csv
+grilla_results*.csv
+output.csv
+
+# Archivos de build y compilación
+build/
+*.o
+*.a
+*.so
+
+# Archivos de Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+cosmo_venv/
+
+# Archivos de CLASS
+delta_prime_cdm.txt
+*.dat
+
+# Imágenes generadas
+*.png
+*.jpg
+*.jpeg
+
+# Archivos temporales y de prueba
+*.tmp
+*.temp
+backup.c
+prueba.c
+para_hacer.txt
+requirements_backup.txt
+
+# Configuraciones IDE
+.vscode/
+
+# Carpetas de proyectos diversos
+misc/
+my-vscode-workspace/
+
+# Archivos de configuración específicos
+test_delta_prime*.ini
