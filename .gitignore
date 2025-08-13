@@ -23,8 +23,8 @@ perturbations_cdm_prime.txt
 *.dat
 *.txt
 
-# Exclude problematic submodule
-class_public/
+# Exclude problematic submodule (only root level)
+/class_public/
 
 # Exclude intensivo folder
 intensivo/
