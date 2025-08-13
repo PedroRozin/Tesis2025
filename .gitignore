@@ -17,9 +17,14 @@ __pycache__/
 venv/
 cosmo_venv/
 
-# Archivos de CLASS
+# Archivos de CLASS y large files
 delta_prime_cdm.txt
+perturbations_cdm_prime.txt
 *.dat
+*.txt
+
+# Exclude problematic submodule
+class_public/
 
 # Imágenes generadas
 *.png
