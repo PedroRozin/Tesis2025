@@ -46,3 +46,9 @@ test_delta_prime*.ini
 delta_prime_cdm.txt
 perturbations_cdm_prime.txt
 delta_prime_cdm.txt
+MCMC_num.py
+notebooks/compare_class_vs_class.ipynb
+notebooks/k_hor.ipynb
+python/CORRECCIONES_GRILLA.md
+python/grilla2.py
+python/test_grilla_consistency.py
