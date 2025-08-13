@@ -26,6 +26,9 @@ perturbations_cdm_prime.txt
 # Exclude problematic submodule
 class_public/
 
+# Exclude intensivo folder
+intensivo/
+
 # Imágenes generadas
 *.png
 *.jpg
