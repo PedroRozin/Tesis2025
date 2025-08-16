@@ -6,36 +6,11 @@ from classy import Class
 from itertools import product
 from tqdm import tqdm
 
-def create_grid(omega_cdm_values, A_s_values, k_values, h=0.68):
-  """
-  Create a grid of parameters for the CLASS simulation.
-  
-  Args:
-    omega_cdm_values (list): List of omega_cdm values to simulate.
-    A_s_values (list): List of A_s values to simulate.
-    k_values (list): List of k values to simulate.
-    h (float): Hubble constant value.
-
-  Returns:
-    list: A list of dictionaries containing the parameters for each simulation.
-  """
-  grid = []
-  for omega_cdm, A_s, k in product(omega_cdm_values, A_s_values, k_values):
-    params = {
-      'Omega_cdm': omega_cdm,
-      'A_s': A_s,
-      'k': k,
-      'h': h
-    }
-    grid.append(params)
-  return grid
-
 def common_settings(k=0.01, omega_m=.3, A_s=2.e-9, h=0.68): 
   """
   Set common settings for the CLASS simulation.
   Esto hace basicamente lo mismo que el diccionario de common_settings del principio (el de Julien),
     pero con los valores de k, omega_cdm, A_s y h como argumentos.
-
   Args:
     k (float): Value of k for the simulation.
     omega_cdm (float): Omega_cdm value for the simulation.
