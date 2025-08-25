@@ -149,23 +149,26 @@ def main():
 FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
   """
   # rango de valores para cada parámetro
-  omega_m_values = np.arange(0.30, 0.34 + 0.03, 0.03)
-  A_s_values = np.arange(1.9e-09, 2.3e-09 + 0.3e-09, 0.3e-09)
-  h_values = np.arange(0.65, 0.80 + 0.03, 0.03)
+  omega_m_values = np.arange(0.30, 0.41, 0.01)
+  # A_s_values = np.arange(1.9e-09, 2.3e-09 + 0.3e-09, 0.3e-09)
+  A_s_values = np.arange(1.9e-09, 3.e-09, 0.1e-09)
+  h_values = np.arange(0.65, 0.76, 0.01)
+  # omega_m_values = np.arange(0.30, 0.32, 0.01)
+  # A_s_values = np.arange(1.9e-09, 2.3e-09 , 0.3e-09)
+  # h_values = np.arange(0.65, 0.67, 0.01)
+  # k_values = np.arange(0.02, 0.22, 0.02)
   results = []
-  a_ini= 0.1
+  a_ini= 0.05
   for omega_m, A_s, h in tqdm(product(omega_m_values, A_s_values, h_values)):
     # 1. Crear universo dado un conjunto de parámetros con `common_settings`.
-    M = common_settings(omega_m=omega_m, A_s=A_s, h=h) #acá parece que es el omega chiquito, pero es Omega grande,
-    
-    # 2. get_perturbations() para obtener las perturbaciones de ese universo. 
+    M = common_settings(omega_m=omega_m, A_s=A_s, h=h) #acá parece que es el omega chiquito, pero es Omega grande.
+
+    # 2. get_perturbations() para obtener las perturbaciones de ese universo.
     # esto ejecuta el CLASS.compute() y devuelve las perturbaciones en el archivo adhoc.
     _perturbations = M.get_perturbations() #variable muda. solo sirve para ejecutar el compute() de CLASS.
     
     # 3. leer el archivo de texto con `read_adhoc_txt` para obtener las perturbaciones y sus derivadas.
     df = read_adhoc_txt()
-    # df= deriv_tau_to_a(df, column_name='delta_dot_cdm')
-    # df= deriv_tau_to_a(df, column_name='delta_dot_b')
     #filtrar df con el valor más cercano de a_ini
     #polemico porque después derivo respecto a 'a' multiplicando 'vectores'; pero es lo mismo (y más rápido) porque lo hace elemento a elemento.
     df = df[df['a'] >= a_ini]
@@ -175,52 +178,61 @@ FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
     # 4. Calcula k_horizon() para obtener el k de la escala de horizonte.
     a_ini_actual = df['a'].min()  # El a mínimo después de filtros iniciales
     k_hor = k_horizon(a_ini= a_ini_actual, omega_m=omega_m, omega_r=9.1e-5, c=3e5) #c en km/s
+    df['k h'] = df['k']*h
     
     # 5. Filtra el DataFrame para obtener solo las perturbaciones con k mayor o igual a k_horizon.
-    df_filtered = df[df['k'] >= k_hor].copy()
+    # df_filtered = df[df['k'] >= k_hor].copy()
+    df_filtered = df[df['k h'] >= k_hor].copy()
+
+    uniques_ks = df_filtered['k'].unique()
     
-    # 6. Aplica deriv_tau_to_a() para obtener las derivadas respecto a 'a'.
-    df_filtered = deriv_tau_to_a(df_filtered, column_name='delta_dot_cdm')
-    df_filtered = deriv_tau_to_a(df_filtered, column_name='delta_dot_b')
-    
-    # 7. Obtener sigma8 con 'get_sigma8()'.
     sigma8 = get_sigma8(M)
     
     # 8. Armar diccionario con los resultados.
     omega_b = M.Omega_b()
-    omega_m = M.Omega_m() #debería ser el mismo de la iteración
+    _omega_m = M.Omega_m() #debería ser el mismo de la iteración
     omega_cdm = omega_m - omega_b
 
-    # indice del valor mínimo de 'a' en df_filtered
-    min_a_idx = df_filtered['a'].idxmin()
-    
-    #compute delta_m and delta_prime_m usando el elemento consistente con formato float128
-    delta_cdm = np.float128(df_filtered.loc[min_a_idx, 'delta_cdm'])
-    delta_b = np.float128(df_filtered.loc[min_a_idx, 'delta_b'])
-    delta_m = compute_delta_m(delta_cdm, delta_b, omega_cdm, omega_b)
-    delta_prime_cdm = np.float128(df_filtered.loc[min_a_idx, 'delta_prime_cdm'])
-    delta_prime_b = np.float128(df_filtered.loc[min_a_idx, 'delta_prime_b'])
-    delta_prime_m = compute_delta_m(delta_prime_cdm, delta_prime_b, omega_cdm, omega_b)
+    for _k in uniques_ks:
+        # Filtrar por k específico
+        df_k = df_filtered[df_filtered['k'] == _k].copy()
+        
+        # Aplicar derivadas solo a este k
+        df_k = deriv_tau_to_a(df_k, column_name='delta_dot_cdm')
+        df_k = deriv_tau_to_a(df_k, column_name='delta_dot_b')
+        
+        # Obtener el índice del a mínimo para este k
+        min_a_idx = df_k['a'].idxmin()
+        
+        # Extraer valores para este k específico
+        delta_cdm = np.float128(df_k.loc[min_a_idx, 'delta_cdm'])
+        delta_b = np.float128(df_k.loc[min_a_idx, 'delta_b'])
+        delta_m = compute_delta_m(delta_cdm, delta_b, omega_cdm, omega_b)
+        delta_prime_cdm = np.float128(df_k.loc[min_a_idx, 'delta_prime_cdm'])
+        delta_prime_b = np.float128(df_k.loc[min_a_idx, 'delta_prime_b'])
+        delta_prime_m = compute_delta_m(delta_prime_cdm, delta_prime_b, omega_cdm, omega_b)
 
-    result_dict = {
-      'a': df_filtered.loc[min_a_idx, 'a'],  
-      'k': df_filtered.loc[min_a_idx, 'k'],  
-      'Omega_cdm': omega_cdm,
-      'Omega_b': omega_b,
-      'Omega_m': omega_m,
-      'A_s': A_s,
-      'h': h,
-      'k_horizon': k_hor,
-      'sigma8': sigma8,
-      'delta_cdm': delta_cdm,  
-      'delta_b': delta_b,      
-      'delta_m': delta_m,
-      'delta_prime_cdm': delta_prime_cdm,  
-      'delta_prime_b': delta_prime_b,
-      'delta_prime_m': delta_prime_m
-    }
-    results.append(result_dict)
-    
+        result_dict = {
+            'a': df_k.loc[min_a_idx, 'a'],  
+            'k': df_k.loc[min_a_idx, 'k'],  # k original
+            'k h': df_k.loc[min_a_idx, 'k h'],
+            'Omega_cdm': omega_cdm,
+            'Omega_b': omega_b,
+            'Omega_m': omega_m,
+            'A_s': A_s,
+            'h': h,
+            'k_horizon': k_hor,
+            'sigma8': sigma8,
+            'delta_cdm': delta_cdm,  
+            'delta_b': delta_b,      
+            'delta_m': delta_m,
+            'delta_prime_cdm': delta_prime_cdm,  
+            'delta_prime_b': delta_prime_b,
+            'delta_prime_m': delta_prime_m
+        }
+        results.append(result_dict)
+        
+
     # 9. Limpiar la memoria de CLASS.
     M.struct_cleanup()
     
@@ -228,7 +240,7 @@ FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
     os.remove('/home/pedrorozin/scripts/delta_prime_cdm.txt')
   #11. Guardar el diccionario en un DataFrame y exportarlo a un archivo CSV.
   df_results = pd.DataFrame(results)
-  df_results.to_csv('grilla_results6.csv', index=False)
+  df_results.to_csv('grilla_results_x11_2.csv', index=False)
 
 if __name__ == "__main__":
   main()
