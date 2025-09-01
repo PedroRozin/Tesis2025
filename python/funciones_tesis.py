@@ -55,7 +55,27 @@ def deriv_tau_to_a(df, column_name='delta_dot_cdm'):
     if column_name == 'delta_dot_b':
       df['delta_prime_b'] = (df[column_name] / (df['H'] * df['a'])).astype('float128')
       return df
+    
 def percent_diff_vs_class(a_vec, delta_m, a_class, delta_m_class):
+    """
+    Interpola la curva de CLASS (o cualquiera) sobre los puntos de integración y calcula el porcentaje de diferencia relativa.
+    Si hay valores duplicados en a_class, solo toma el primero.
+    """
+    a_class = np.asarray(a_class)
+    delta_m_class = np.asarray(delta_m_class)
+    # eliminar duplicados si existen
+    if len(np.unique(a_class)) < len(a_class):
+        _, unique_indices = np.unique(a_class, return_index=True)
+        a_class = a_class[unique_indices]
+        delta_m_class = delta_m_class[unique_indices]
+    interp_class = interp1d(a_class, delta_m_class, kind='quadratic',
+                            bounds_error=False, fill_value= "extrapolate")
+    delta_m_class_interp = interp_class(a_vec)
+    # percent_diff = 100 * (delta_m - delta_m_class_interp) / delta_m_class_interp
+    percent_diff = np.array(100 * (delta_m - delta_m_class_interp) / delta_m)
+    return percent_diff
+
+def percent_dif_matter_cdm(a_vec, delta_m, a_class, delta_m_class):
     """
     Interpola la curva de CLASS (o cualquiera) sobre los puntos de integración y calcula el porcentaje de diferencia relativa.
     Si hay valores duplicados en a_class, solo toma el primero.
@@ -71,7 +91,7 @@ def percent_diff_vs_class(a_vec, delta_m, a_class, delta_m_class):
                             bounds_error=False, fill_value="extrapolate")
     delta_m_class_interp = interp_class(a_vec)
     # percent_diff = 100 * (delta_m - delta_m_class_interp) / delta_m_class_interp
-    percent_diff = -100 * (delta_m - delta_m_class_interp) / delta_m
+    percent_diff = np.array(100 * (delta_m - delta_m_class_interp) / delta_m)
     return percent_diff
 
 #%%  Func. de CLASS
@@ -108,6 +128,28 @@ def common_settings(k=0.01, omega_m=.3, A_s=2.e-9, h=0.68):
   M.set(_common_settings)
   M.compute()
   return M
+
+def get_df_from_M(M): #tal vez lo modifique para obtener las derivadas directamente acá. sería útil para la grilla.
+  """
+  Extracts 'delta_cdm', 'a', and 'tau [Mpc]' vectors from the perturbations.
+  It does not extract inputs of the perturbation dictionary (like A_s, h, omega...)
+
+  Args:
+    class: M - (example: common_settings(k=1)).
+
+  Returns:
+    A Pandas DataFrame containing the desired vectors.
+  """
+  all_k = M.get_perturbations()
+  one_k = all_k['scalar'][0]
+  a = one_k['a']
+  tau = one_k['tau [Mpc]']
+  delta_cdm = one_k['delta_cdm']
+  delta_b = one_k['delta_b']
+  df = pd.DataFrame({'tau [Mpc]': tau, 'a': a, 'delta_cdm': delta_cdm, 'delta_b': delta_b})
+  #rename tau
+  df.rename(columns={'tau [Mpc]': 'tau'}, inplace=True)
+  return df
 
 def get_sigma8(M):
   """
@@ -147,6 +189,26 @@ def read_adhoc_txt(file_path = '/home/pedrorozin/scripts/delta_prime_cdm.txt'):
   
   df = pd.read_csv(file_path, sep=' ', names=['delta_cdm', 'delta_dot_cdm', 'delta_b', 'delta_dot_b', 'a', 'k', 'H'], dtype=dtype_dict)
   return df
+
+def filter_adhoc_by_k(df, k_value):
+    """
+    Filtra el DataFrame por un valor específico de k.
+
+    Args:
+        df (DataFrame): El DataFrame a filtrar.
+        k_value (float): El valor de k por el cual filtrar.
+
+    Returns:
+        DataFrame: El DataFrame filtrado.
+    """
+    df_filtered = df[df['k'] >= k_value].copy()
+    df_filtered.sort_values(by='k', inplace=True)
+    #min k
+    if not df_filtered.empty:
+        min_k = df_filtered['k'].min()
+        df_filtered = df[df['k'] == min_k]
+
+    return df_filtered
 
 #%% Funciones para obtener resultados desde el output de CLASS 
 
@@ -195,86 +257,207 @@ def read_ini_params(filepath):
             if "=" in line:
                 key, value = [x.strip() for x in line.split("=", 1)] #separo valores
                 if key in params:
-                    params[key] = float(value) #agrego al dicc
+                    params[key] = float(value) #agrego al dicc # type: ignore
     return params
 
-#%% Funciones para integrar numéricamente
-Om_r = 9.045385269436243e-05  # Radiation density parameter, hardcoded for now
-a0 = 0.01
-def Hh(params,a, Om_r =9.045385269436243e-05):
+#%% Clase para integraciones numéricas
+class NumericalIntegrator:
     """
-    Calcula el Hubble parameter dado 'a'. Está normalizado a 1 en a=1 (H_0=1). 
-    Args:
-        params (tuple): A tuple containing the matter density parameter (Om_m_0) and sigma8.
-        sigma8 es mudo para las ecuaciones, no se usa.
-        Om_r (float): The radiation density parameter. No está definido acá (corregirlo en un futuro con tiempo),
-          pero sale del CLASS output con M.Omega_r().
-        Om_m_0 (float): The matter density parameter at a=1.
-        Om_L (float): The dark energy density parameter at a=1, calculated as
-                      Om_L = 1 - Om_m_0 - Om_r.
-        a (float or array-like): The scale factor at which to calculate the Hubble parameter.
-    Returns:
-        float or array-like: The Hubble parameter at the given scale factor 'a'.
+    Clase para realizar integraciones numéricas de las perturbaciones cosmológicas.
+    
+    Attributes:
+        Om_m_0 (float): Matter density parameter
+        sigma8 (float): Sigma8 parameter (opcional, usado para futuras extensiones)
+        Om_r (float): Radiation density parameter
+        a_0 (float): Initial scale factor
+        a_f (float): Final scale factor
+        method (str): Integration method for solve_ivp
+        atol (float): Absolute tolerance
+        rtol (float): Relative tolerance
+        n_points (int): Number of points for integration
+        
+        # Results (populated after calling integrate())
+        a_vec (array): Scale factor array
+        delta (array): Delta values
+        delta_prime (array): Delta prime values
     """
-    Om_m_0, s8=params
-    Om_L=1-Om_m_0-Om_r
-    return np.sqrt(Om_L+Om_m_0/a**3+Om_r/a**4)
+    
+    def __init__(self, Om_m_0, sigma8=None, Om_r=9.045385269436243e-05, 
+                 a_0=0.01, a_f=1.0, method='RK45', atol=1e-10, rtol=1e-8, n_points=20000):
+        """
+        Initialize the numerical integrator.
+        
+        Args:
+            Om_m_0 (float): Matter density parameter
+            sigma8 (float): Sigma8 parameter (opcional)
+            Om_r (float): Radiation density parameter
+            a_0 (float): Initial scale factor
+            a_f (float): Final scale factor
+            method (str): Integration method
+            atol (float): Absolute tolerance
+            rtol (float): Relative tolerance
+            n_points (int): Number of integration points
+        """
+        self.Om_m_0 = Om_m_0
+        self.sigma8 = sigma8 if sigma8 is not None else 0.8  # Default value
+        self.Om_r = Om_r
+        self.Om_L = 1 - Om_m_0 - Om_r
+        self.a_0 = a_0
+        self.a_f = a_f
+        self.method = method
+        self.atol = atol
+        self.rtol = rtol
+        self.n_points = n_points
 
-def Hh_p(params,a, Om_r = 9.045385269436243e-05):
-    """Calcula la derivada del Hubble parameter con respecto a 'a'.
-    Args:
-        params (tuple): A tuple containing the matter density parameter (Om_m_0) and sigma8.
-        sigma8 es mudo para las ecuaciones, no se usa.
-        Om_r (float): The radiation density parameter sale del CLASS output con M.Omega_r()
-        Om_m_0 (float): The matter density parameter at a=1.
-        Om_L (float): The dark energy density parameter at a=1, calculated as
-                      Om_L = 1 - Om_m_0 - Om_r.
-        a (float or array-like): The scale factor at which to calculate the derivative of the Hubble parameter.
-    Returns:
-        float or array-like: The derivative of the Hubble parameter with respect to 'a'.
-    """
-    Om_m_0, s8=params
-    Om_L = 1-Om_m_0-Om_r
-    num = (3*Om_m_0/a**4+4*Om_r/a**5)
-    den = 2*np.sqrt(Om_L+Om_m_0/a**3+Om_r/a**4)
-    return -num/den
+        # declaro variables. se calculan después de la integración
+        self.a_vec = None
+        self.delta = None
+        self.delta_prime = None
+        
+    def Hh(self, a):
+        """
+        Calcula el Hubble parameter dado 'a'. Está normalizado a 1 en a=1 (H_0=1).
+        
+        Args:
+            a (float or array-like): The scale factor
+            
+        Returns:
+            float or array-like: The Hubble parameter at the given scale factor 'a'
+        """
+        return np.sqrt(self.Om_L + self.Om_m_0/a**3 + self.Om_r/a**4)
+    
+    def Hh_prime(self, a):
+        """
+        Calcula la derivada del Hubble parameter con respecto a 'a'.
+        
+        Args:
+            a (float or array-like): The scale factor
+            
+        Returns:
+            float or array-like: The derivative of the Hubble parameter with respect to 'a'
+        """
+        num = (3*self.Om_m_0/a**4 + 4*self.Om_r/a**5)
+        den = 2*np.sqrt(self.Om_L + self.Om_m_0/a**3 + self.Om_r/a**4)
+        return -num/den
+    
+    def _differential_equation(self, a, X):
+        """
+        Define la ecuación diferencial para delta_m.
+        
+        Args:
+            a (float): Scale factor
+            X (array): [delta, delta_prime]
+            
+        Returns:
+            array: [delta_prime, delta_double_prime]
+        """
+        f1 = X[1]  # delta_prime
+        term1 = X[0] * 3 * self.Om_m_0 / (2 * (self.Hh(a) ** 2) * (a ** 5))
+        term2 = -X[1] * ((3 / a) + (self.Hh_prime(a) / self.Hh(a)))
+        f2 = term1 + term2  # delta_double_prime
+        return np.array([f1, f2])
+    
+    def integrate(self, delta_0, delta_prime_0):
+        """
+        Integra la ecuación diferencial para delta_m.
+        
+        Args:
+            delta_0 (float): Valor inicial de delta_m
+            delta_prime_0 (float): Valor inicial de la derivada de delta_m
+            
+        Returns:
+            tuple: (a_vec, delta_values, delta_prime_values)
+        """
+        self.a_vec = np.linspace(self.a_0, self.a_f, self.n_points)
+        
+        solution = solve_ivp(
+            fun=self._differential_equation,
+            t_span=[self.a_0, self.a_f],
+            y0=np.array([delta_0, delta_prime_0]),
+            t_eval=self.a_vec,
+            method=self.method,
+            atol=self.atol,
+            rtol=self.rtol
+        )
+        
+        if not solution.success:
+            print(f"Warning: solve_ivp did not converge with method {self.method}: {solution.message}")
+        
+        self.delta = solution.y[0]
+        self.delta_prime = solution.y[1]
+        
+        return self.a_vec, self.delta, self.delta_prime
+    
+    def get_a(self):
+        """
+        Returnea el array de scale factors.
+        
+        Returns:
+            array: Scale factor values
+        """
+        if self.a_vec is None:
+            raise ValueError("Must call integrate() first")
+        return self.a_vec
+    
+    def get_delta(self):
+        """
+        Returnea el array de delta values.
+        
+        Returns:
+            array: Delta values
+        """
+        if self.delta is None:
+            raise ValueError("Must call integrate() first")
+        return self.delta
+    
+    def get_delta_prime(self):
+        """
+        Returnea el array de delta_prime values.
+        
+        Returns:
+            array: Delta prime values
+        """
+        if self.delta_prime is None:
+            raise ValueError("Must call integrate() first")
+        return self.delta_prime
+    
+    def get_results_df(self):
+        """
+        Returnea los resultados como DataFrame.
+        
+        Returns:
+            DataFrame: DataFrame con columnas 'a', 'delta', 'delta_prime'
+        """
+        if self.a_vec is None or self.delta is None or self.delta_prime is None:
+            raise ValueError("Must call integrate() first")
+        
+        return pd.DataFrame({
+            'a': self.a_vec,
+            'delta': self.delta,
+            'delta_prime': self.delta_prime
+        })
 
-def get_delta_cdm_vs_a(params, delta_0,
-                        delta_prima_0, a_0=a0, a_f=1 ,method='RK45',
-                          atol=1e-10, rtol=1e-8, omr= Om_r):
+## esto ya no es más de la clase
+def get_delta_cdm_vs_a(params, delta_0, delta_prima_0, a_0=0.01, a_f=1, method='RK45',
+                      atol=1e-10, rtol=1e-8, omr=9.045385269436243e-05):
     """
-    Integra la ecuación diferencial para delta_m vs con solve_ivp.
-    Permite elegir método y tolerancias.
+    Función de compatibilidad - usa la nueva clase internamente.
+    
     Args:
         params: Tuple (Om_m, sigma8)
-        delta_0: Valor inicial de delta_m.
-        delta_prima_0: Valor inicial de la derivada de delta_m.
-        method: Método de solve_ivp ('RK45', 'DOP853', 'Radau', etc.)
-        atol: Tolerancia absoluta
-        rtol: Tolerancia relativa
+        delta_0: Valor inicial de delta_m
+        delta_prima_0: Valor inicial de la derivada de delta_m
+        a_0, a_f: Scale factors inicial y final
+        method: Método de integración
+        atol, rtol: Tolerancias
+        omr: Parámetro de radiación
+        
     Returns:
-        a_vec: Array de scale factors
-        delta_num: Array de delta_cdm values
+        tuple: (a_vec, delta_num)
     """
-    a_vec = np.linspace(a_0, a_f, 20000)
-    def F(a, X):
-        f1 = X[1]
-        term1 = X[0] * 3 * params[0] / (2 * (Hh(params, a, Om_r=omr) ** 2) * (a ** 5))
-        term2 = -X[1] * ((3 / a) + (Hh_p(params, a, Om_r=omr) / Hh(params, a, Om_r=omr)))
-        f2 = term1 + term2
-        return np.array([f1, f2])
-    out2 = solve_ivp(
-        fun=F,
-        t_span=[a_0, a_f],
-        y0=np.array([delta_0, delta_prima_0]),
-        t_eval=a_vec,
-        method=method,
-        atol=atol,
-        rtol=rtol
-    )
-    if not out2.success:
-        print(f"Warning: solve_ivp did not converge with method {method}: {out2.message}")
-    delta_num = out2.y[0]
+    Om_m_0, sigma8 = params
+    integrator = NumericalIntegrator(Om_m_0, sigma8, omr, a_0, a_f, method, atol, rtol)
+    a_vec, delta_num, _ = integrator.integrate(delta_0, delta_prima_0)
     return a_vec, delta_num
 
 #%%
