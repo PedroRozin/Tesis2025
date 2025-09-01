@@ -12,7 +12,7 @@ import csv
 from tqdm import tqdm
 
 
-n= '1'
+n= 'prueba'
 
 # ===========================
 # 1. Cargar y preparar datos
@@ -21,7 +21,7 @@ path = '/home/pedrorozin/scripts/grilla_results_x11_2.csv'
 df = pd.read_csv(path)
 
 # Features y targets
-features = df[["A_s", "k h", "h", "Omega_m", "sigma8"]].values
+features = df[["a", "A_s", "k h", "h", "Omega_m", "sigma8"]].values
 targets = df[["delta_m", "delta_prime_m", "sigma8"]].values
 
 # División aleatoria ANTES de escalar para evitar data leakage
@@ -63,7 +63,7 @@ class RegressionNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(5, 128),
+            nn.Linear(6, 128),
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
@@ -86,7 +86,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3)
 # ===========================
 # 4. Loop de entrenamiento
 # ===========================
-epochs = 200
+epochs = 2
 train_losses, val_losses = [], []
 
 for epoch in range(epochs):
@@ -153,7 +153,7 @@ r2_targets = r2_score(y_true_phys, y_pred_phys, multioutput="raw_values")
 
 
 path_folder = '/home/pedrorozin/scripts/outputs_pedro/neural_networks'
-n = '1'
+n = '1_with_a'
 with open(f"{path_folder}/final_metrics_{n}.csv", "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["Target", "MAE", "R2"])
