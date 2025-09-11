@@ -1,0 +1,36 @@
+K-FOLD CROSS VALIDATION RESULTS
+========================================
+
+Dataset: 28960 samples
+Features: 4 (a, k h, h, Omega_m)
+Targets: 2 (delta_m, delta_prime_m)
+
+K-Fold Configuration:
+  - Number of folds: 5
+  - Shuffle: True
+  - Random state: 42
+
+Training Configuration:
+  - Max epochs: 400
+  - Batch size: 128
+  - Learning rate: 5e-4
+  - Optimizer: Adam with weight_decay=1e-4
+  - Early stopping: patience=50, min_delta=1e-6
+  - LR scheduler: ReduceLROnPlateau
+
+Cross Validation Results:
+  delta_m:
+    MAE: 5.963205 ± 0.141034
+    R²:  0.999751 ± 0.000014
+  delta_prime_m:
+    MAE: 183.004822 ± 4.493124
+    R²:  0.999757 ± 0.000012
+
+Best Fold: 4
+Best Val Loss: 0.000232
+
+Final Model (trained on 80% of data):
+  Val Loss: 0.000232
+  MAE delta_m: 5.795824
+  R² delta_m: 0.999766
+  Epochs trained: 400

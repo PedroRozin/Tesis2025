@@ -1,0 +1,43 @@
+RegressionNN(
+  (network): Sequential(
+    (0): Linear(in_features=4, out_features=128, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=128, out_features=128, bias=True)
+    (3): ReLU()
+    (4): Linear(in_features=128, out_features=128, bias=True)
+    (5): ReLU()
+    (6): Linear(in_features=128, out_features=128, bias=True)
+    (7): ReLU()
+    (8): Linear(in_features=128, out_features=64, bias=True)
+    (9): ReLU()
+    (10): Linear(in_features=64, out_features=2, bias=True)
+  )
+)
+network.0.weight: torch.Size([128, 4])
+network.0.bias: torch.Size([128])
+network.2.weight: torch.Size([128, 128])
+network.2.bias: torch.Size([128])
+network.4.weight: torch.Size([128, 128])
+network.4.bias: torch.Size([128])
+network.6.weight: torch.Size([128, 128])
+network.6.bias: torch.Size([128])
+network.8.weight: torch.Size([64, 128])
+network.8.bias: torch.Size([64])
+network.10.weight: torch.Size([2, 64])
+network.10.bias: torch.Size([2])
+
+activation: ReLU()
+input_size: 4
+output_size: 2
+num_epochs: 400
+number of training samples: 23168
+number of validation samples: 5792
+batch_size: 128
+optimizer: Adam
+learning_rate: 0.0005
+loss_function: MSELoss
+final_train_loss: 1.762087541359486e-05
+final_val_loss: 7.370306455976592e-05
+
+grilla entrenada con:
+/home/pedrorozin/scripts/outputs_pedro/grillas/sin_As/grilla_results_no_As.csv
