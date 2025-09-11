@@ -11,3 +11,7 @@ Mayoritariamente compuesto por .py, aunque hay algunas otras cosas para vereific
 
 ## notebook
 idem python
+
+## outputs_pedro
+Mayoritariamente compuesto por carpetas con grillas y redes entrenadas para las grillas.
+Alguna que otra imagen también podría encontrarse.
