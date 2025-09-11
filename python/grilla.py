@@ -5,39 +5,8 @@ import os
 from classy import Class
 from itertools import product
 from tqdm import tqdm
+from funciones_tesis import common_settings
 
-def common_settings(k=0.01, omega_m=.3, A_s=2.e-9, h=0.68): 
-  """
-  Set common settings for the CLASS simulation.
-  Esto hace basicamente lo mismo que el diccionario de common_settings del principio (el de Julien),
-    pero con los valores de k, omega_cdm, A_s y h como argumentos.
-  Args:
-    k (float): Value of k for the simulation.
-    omega_cdm (float): Omega_cdm value for the simulation.
-    A_s (float): A_s value for the simulation.
-    h (float): h value for the simulation.
-
-  Returns:
-    A dictionary containing the common settings for the simulation.
-  """
-  _common_settings = {
-    'output': 'mPk',
-    'k_output_values': k,
-    'h': h,
-    # 'Omega_b': 0.3-omega_cdm,
-    # 'Omega_cdm': omega_cdm,
-    'Omega_m': omega_m,
-    'A_s': A_s,
-    'n_s': 0.965,
-    'tau_reio': 0.05430842,
-    'YHe': 0.2454,
-    'compute damping scale': 'yes',
-    'gauge': 'newtonian'
-    }
-  M = Class()
-  M.set(_common_settings)
-  M.compute()
-  return M
 
 def k_horizon(a_ini=.01, omega_m=0.3, omega_r=9.1e-5, c=299792458):
   """Calculate the comoving horizon scale dados los omegas que le pongamos y el a_ini.
@@ -126,7 +95,6 @@ def main():
   CLASS calcula para todos los k's, entonces ese no es un parámetro a barrer; simplemente filtramos el df para k in horizont.
   Parámetros a barrer:
   - Omega_cdm
-  - A_s
   - h
 
   Pipeline:
@@ -135,33 +103,47 @@ def main():
   2. get_perturbations() para obtener las perturbaciones de ese universo.
   3. Leer el archivo de texto con `read_adhoc_txt` para obtener las perturbaciones y sus derivadas.
      - Filtrar por a_ini: quedarme con el primer valor de a (el más cercano al a_ini).
-  4. Calcula k_horizon() para obtener el k de la escala de horizonte.
+  4. Calcula k_horizon() para obtener el k de la escala de horizonte. Esto está en h/Mpc.
   5. Filtra el DataFrame para obtener solo las perturbaciones con k mayor o igual a k_horizon.
-  6. Aplica deriv_tau_to_a() para obtener las derivadas respecto a 'a'.
-  7. Obtener sigma8 con 'get_sigma8()'.
-  8. Armar diccionario con 'Omega_cdm', 'Omega_b', 'A_s', h, 'k_horizon',
+  6. Empezar iteración en los k's que quedaron.
+  7. Aplica deriv_tau_to_a() para obtener las derivadas respecto a 'a'.
+  8. Obtener sigma8 con 'get_sigma8()'.
+  9. Armar diccionario con 'Omega_cdm', 'Omega_b', 'A_s', h, 'k_horizon',
     'sigma8', 'delta_cdm', 'delta_b', 'delta_prime_cdm', 'delta_prime_b'. Appendearlos en una lista
-  9. Limpiar la memoria de CLASS con `M.struct_cleanup()`.
-  10. Borrar el archivo adhoc para poder generear un nuevo en la próxima iteración.
-  11. Guardar el diccionario en un DataFrame y exportarlo a un archivo CSV.
-  
+  10. Limpiar la memoria de CLASS con `M.struct_cleanup()`.
+  11. Borrar el archivo adhoc para poder generear un nuevo en la próxima iteración.
+  12. Guardar el diccionario en un DataFrame y exportarlo a un archivo CSV.
 
-FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
+
   """
+
+  #==========================
+  # carpeta donde se guardará todo
+  path_folder = '/home/pedrorozin/scripts/outputs_pedro/grillas/'
+  n = 'sin_As'
+
+  if os.path.exists(path_folder + n):
+      raise FileExistsError(f"El directorio {path_folder}/{n} ya existe.")
+
+  if not os.path.exists(path_folder + n):
+      os.makedirs(path_folder + n)
+  #==========================
+
   # rango de valores para cada parámetro
-  omega_m_values = np.arange(0.30, 0.41, 0.01)
-  # A_s_values = np.arange(1.9e-09, 2.3e-09 + 0.3e-09, 0.3e-09)
-  A_s_values = np.arange(1.9e-09, 3.e-09, 0.1e-09)
+  omega_m_values = np.arange(0.15, 0.45, 0.01)
+  # A_s_values = np.arange(1.9e-09, 3.e-09, 0.1e-09)
   h_values = np.arange(0.65, 0.76, 0.01)
+
+  # A_s_values = np.arange(1.9e-09, 2.3e-09 + 0.3e-09, 0.3e-09)
   # omega_m_values = np.arange(0.30, 0.32, 0.01)
   # A_s_values = np.arange(1.9e-09, 2.3e-09 , 0.3e-09)
   # h_values = np.arange(0.65, 0.67, 0.01)
   # k_values = np.arange(0.02, 0.22, 0.02)
   results = []
-  a_ini= 0.05
-  for omega_m, A_s, h in tqdm(product(omega_m_values, A_s_values, h_values)):
+  a_ini= 0.03 #z \approx 33
+  for omega_m, h in tqdm(product(omega_m_values, h_values)):
     # 1. Crear universo dado un conjunto de parámetros con `common_settings`.
-    M = common_settings(omega_m=omega_m, A_s=A_s, h=h) #acá parece que es el omega chiquito, pero es Omega grande.
+    M = common_settings(k=0.1, omega_m=omega_m, h=h) #acá parece que es el omega chiquito, pero es Omega grande.
 
     # 2. get_perturbations() para obtener las perturbaciones de ese universo.
     # esto ejecuta el CLASS.compute() y devuelve las perturbaciones en el archivo adhoc.
@@ -177,7 +159,7 @@ FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
 
     # 4. Calcula k_horizon() para obtener el k de la escala de horizonte.
     a_ini_actual = df['a'].min()  # El a mínimo después de filtros iniciales
-    k_hor = k_horizon(a_ini= a_ini_actual, omega_m=omega_m, omega_r=9.1e-5, c=3e5) #c en km/s
+    k_hor = k_horizon(a_ini= a_ini_actual, omega_m=omega_m, omega_r=9.1e-5, c=3e5)*h #c en km/s, k_hor en h/Mpc
     df['k h'] = df['k']*h
     
     # 5. Filtra el DataFrame para obtener solo las perturbaciones con k mayor o igual a k_horizon.
@@ -219,7 +201,7 @@ FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
             'Omega_cdm': omega_cdm,
             'Omega_b': omega_b,
             'Omega_m': omega_m,
-            'A_s': A_s,
+            'A_s': 2.e-9,  # A_s fijo
             'h': h,
             'k_horizon': k_hor,
             'sigma8': sigma8,
@@ -240,7 +222,22 @@ FILTRAR POR A INI Y CORREGIR ARGUMENTS DEL K THRESHOLD
     os.remove('/home/pedrorozin/scripts/delta_prime_cdm.txt')
   #11. Guardar el diccionario en un DataFrame y exportarlo a un archivo CSV.
   df_results = pd.DataFrame(results)
-  df_results.to_csv('grilla_results_x11_2.csv', index=False)
+
+
+
+
+
+  df_results.to_csv(f'{path_folder}/{n}/grilla_results_no_As.csv', index=False)
+  #create info_grilla.txt
+  with open(f'{path_folder}/{n}/info_grilla_no_As.txt', 'w') as f:
+      f.write(f'Grilla de parámetros:\n')
+      f.write(f'Omega_m: min {omega_m_values.min()}, max {omega_m_values.max()}, len {len(omega_m_values)}\n')
+      f.write(f'h: min {h_values.min()}, max {h_values.max()}, len {len(h_values)}\n')
+      f.write(f'A_s fijo en 2.e-9\n')
+      f.write(f'Número total de puntos en la grilla: {len(df_results)}\n')
+      f.write(f'min a_ini: {df_results["a"].min()}, max a_ini: {df_results["a"].max()}\n')
+      f.write(f'Rango de k_horizon: min {df_results["k_horizon"].min()}h/Mpc, max {df_results["k_horizon"].max()}h/Mpc\n')
+
 
 if __name__ == "__main__":
   main()
