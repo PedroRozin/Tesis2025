@@ -1,13 +1,15 @@
+from multiprocessing.pool import Pool
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
-from scipy.integrate import solve_ivp
+from scipy.integrate import solve_ivp, simpson
 from scipy.constants import c as c_ms
 import torch
 import joblib
 import pandas as pd
-
 from funciones_tesis import ImprovedRegressionNN
+
+
 
 # Constantes cosmológicas por defecto
 DEFAULT_OM_R_0 = 9.4e-5  # Omega_radiación hoy
@@ -20,6 +22,77 @@ DEFAULT_Z_0 = 30  # Redshift inicial para la integración delta (cambiar a 25)
 default_b=0.1
 default_k=0.01
 default_h = .68
+
+# Función global para paralelización 
+def _process_k_parallel(args):
+    """
+    Función global para procesar cada k en paralelo.
+    Necesita ser global para que multiprocessing pueda serializar (no termino de entender por qué).
+    """
+    i, k_val, h, Om_m_0, b, z_ini_HS, z_0, delta_ini_i, delta_p_ini_i, a_vec = args
+    try:
+        from scipy.integrate import solve_ivp
+        solver_k = DeltaSolver(k=k_val, h=h, Om_m_0=Om_m_0, 
+                              b=b, z_ini_HS=z_ini_HS, z_0=z_0)
+        y0 = [delta_ini_i, delta_p_ini_i]
+        
+        # Resolver usando exactamente la misma grilla a_vec para todos los k's
+        H_num, H_prime_num, r_num = solver_k.H_HS()
+        
+        def delta_wrapper(a, y):
+            return solver_k.delta_mg(a, y, H_num, H_prime_num, r_num)
+        
+        a_ini = a_vec[0]
+        a_fin = a_vec[-1]
+        
+        # Resolver con la grilla común a_vec
+        sol_MG = solve_ivp(delta_wrapper, [a_ini, a_fin], y0,
+                          t_eval=a_vec, method='RK45',
+                          atol=1e-12, rtol=1e-10)
+        
+        delta_result = sol_MG.y[0]
+        delta_p_result = sol_MG.y[1]
+        
+        return i, delta_result, delta_p_result
+    except Exception as e:
+        print(f"Error en k={k_val}: {e}")
+        return i, np.full_like(a_vec, np.nan), np.full_like(a_vec, np.nan)
+
+
+def _process_k_parallel_lcdm(args):
+    """
+    Función global para procesar cada k en paralelo para LCDM.
+    """
+    i, k_val, h, Om_m_0, z_0, delta_ini_i, delta_p_ini_i, a_vec = args
+    try:
+        from scipy.integrate import solve_ivp
+        solver_k = DeltaSolver(k=k_val, h=h, Om_m_0=Om_m_0, z_0=z_0)
+        y0 = [delta_ini_i, delta_p_ini_i]
+        
+        def delta_wrapper(a, y):
+            return solver_k.delta_lcdm(a, y)
+        
+        a_ini = a_vec[0]
+        a_fin = a_vec[-1]
+        
+        # Resolver con la grilla común a_vec
+        sol_LCDM = solve_ivp(delta_wrapper, [a_ini, a_fin], y0,
+                            t_eval=a_vec, method='RK45',
+                            atol=1e-12, rtol=1e-10)
+        
+        delta_result = sol_LCDM.y[0]
+        delta_p_result = sol_LCDM.y[1]
+        
+        return i, delta_result, delta_p_result
+    except Exception as e:
+        print(f"Error en k={k_val} (LCDM): {e}")
+        return i, np.full_like(a_vec, np.nan), np.full_like(a_vec, np.nan)
+
+
+def _simpson_chunk(args):
+    """Función auxiliar para paralelizar simpson"""
+    y_chunk, x_chunk = args
+    return simpson(y_chunk, x=x_chunk)
 
 
 class DeltaSolver:
@@ -113,7 +186,7 @@ class DeltaSolver:
         return dH
     
     def H_HS(self,z_ini_HS=None):
-        """Calcula H_HS, dH_HS/dz, R_HS"""
+        """Calcula H_HS, dH_HS/dz, R_HS. Devuelve H(z)/H0"""
         if z_ini_HS is None:
             z_ini_HS = self.z_ini_HS
             
@@ -199,6 +272,8 @@ class DeltaSolver:
 
     def red_para_condiciones_iniciales(self, parametros = [0.03, 0.1, 0.68, 0.3], name ='tanh'):
         """ condiciones iniciales a partir de la red neuronal entrenada"""
+        device = torch.device('cpu')
+        torch.manual_seed(0)
         model = ImprovedRegressionNN(activation='tanh')
         folder_path = str(name)
         network_name = f'_{folder_path}'
@@ -251,12 +326,9 @@ class DeltaSolver:
     def solve_delta_lcdm(self, num_points=1000):
         """Resuelve la ecuación delta para parámetros dados"""
         # Preparar vector de factor de escala
-        a_ini = 1/self.z_0
+        a_ini = self.a_0
         a_fin = 1
         a_vec = np.logspace(np.log10(a_ini), np.log10(a_fin), num_points)
-        a_vec = a_vec[(a_vec > a_ini) & (a_vec < a_fin)]
-        a_vec = np.insert(a_vec, 0, a_ini)
-        a_vec = np.insert(a_vec, len(a_vec), a_fin)
 
         # Condiciones iniciales
         # y0 = [a_ini, 1.0]  # Modo creciente en régimen de materia: δ ∝ a
@@ -282,12 +354,9 @@ class DeltaSolver:
     def solve_delta_mg(self, num_points=1000):
         """Resuelve la ecuación delta para parámetros dados"""
         # Preparar vector de factor de escala
-        a_ini = 1/self.z_0
+        a_ini = self.a_0
         a_fin = 1
         a_vec = np.logspace(np.log10(a_ini), np.log10(a_fin), num_points)
-        a_vec = a_vec[(a_vec > a_ini) & (a_vec < a_fin)]
-        a_vec = np.insert(a_vec, 0, a_ini)
-        a_vec = np.insert(a_vec, len(a_vec), a_fin)
 
         # Condiciones iniciales  (pedro modificar)
         # y0 = [a_ini, 1.0]  # Modo creciente en régimen de materia: δ ∝ a
@@ -323,6 +392,739 @@ class DeltaSolver:
         plt.tight_layout()
         return plt.gcf()
     
+    def compute_f_with_f_k(self, z_vec, f_k_array, k_array=None, use_mg_hubble=True):
+        """
+        Calcula f(z) a partir de la transformada de Fourier de f(k,z).
+        
+        Basado en la fórmula de la imagen:
+        f(z) = (1/2π²) ∫ k² f(k,z) sinc(k·x(z)) dk
+        
+        donde x(z) es la distancia comoving:
+        x(z) = ∫_0^z c dz'/H(z')
+        
+        Para gravedad modificada, se usa H_HS(z) en lugar de H_LCDM(z).
+        
+        Args:
+        -----
+        z_vec : array
+            Array de valores z correspondientes a las columnas de f_k_array
+        f_k_array : array (n_k x n_z)
+            Array de valores f(k,z) para todos los k's y z
+        k_array : array (opcional)
+            Array de valores k. Si None, usa un array default
+        use_mg_hubble : bool
+            Si True, usa H_HS para gravedad modificada. Si False, usa H_LCDM.
+
+        Returns:
+        --------
+        f_z : array (n_z,)
+            Array 1D de valores f(z) para cada redshift en z_vec
+        """
+        if k_array is None:
+            k_array = np.logspace(-3, 1, f_k_array.shape[0])  # Default k range
+        if f_k_array.shape[0] != len(k_array):
+            raise ValueError("f_k_array debe tener la misma cantidad de filas que k_array.")
+        
+        # Calcular las distancias comoving x para cada z
+        if use_mg_hubble:
+            try:
+                H_num, H_prime_num, r_num = self.H_HS()
+                def H_function(z):
+                    if np.isscalar(z):
+                        return H_num(z) if z <= self.z_ini_HS else self.H_LCDM(z)
+                    else:
+                        result = np.zeros_like(z)
+                        mask_mg = z <= self.z_ini_HS
+                        result[mask_mg] = H_num(z[mask_mg])
+                        result[~mask_mg] = self.H_LCDM(z[~mask_mg])
+                        return result
+            except:
+                print("Warning: No se pudo calcular H_HS, usando H_LCDM")
+                H_function = self.H_LCDM
+        else:
+            H_function = self.H_LCDM
+        
+        # Calcular distancias comoving x(z) = ∫_0^z c/H(z') dz' para cada z
+        x_comoving = np.zeros_like(z_vec)
+        c = self.c  
+        for i, z in enumerate(z_vec):
+            if z > 0:
+                z_int = np.linspace(0, z, 1000)
+                H_int = H_function(z_int)
+                # Integrar c/H(z') dz'
+                x_comoving[i] = simpson(c/H_int, x=z_int)
+            else:
+                x_comoving[i] = 0.0  # x(z=0) = 0
+    
+        def sinc_normalized(u):
+            return np.sinc(u)  # np.sinc ya maneja bien el caso u=0
+        
+        # Calcular f(z) usando la transformada de Fourier con x(z) conocido
+        f_z = np.zeros(len(z_vec))
+        
+        for i, (z, x_z) in enumerate(zip(z_vec, x_comoving)):
+            # Para cada z, usar su x(z) correspondiente
+            # Integrando: k² f(k,z) sinc(k·x(z)) dk
+            integrando = (k_array**2) * f_k_array[:, i] * sinc_normalized(k_array * x_z)
+            
+            # Integrar sobre k
+            f_z[i] = simpson(integrando, x=k_array) / (2 * np.pi**2)
+        
+        return f_z
+    
+
+class VectorizedDeltaSolver:
+    """
+    Versión vectorizada de DeltaSolver que puede calcular múltiples k's simultáneamente
+    usando GPU cuando esté disponible.
+    """
+    def __init__(self, k_array, Om_m_0=DEFAULT_OM_M_0, Om_r_0=DEFAULT_OM_R_0, 
+                 z_f=DEFAULT_Z_F, z_ini_HS=DEFAULT_Z_INI_HS, z_0=DEFAULT_Z_0, 
+                 c=DEFAULT_C, b=default_b, h=default_h, use_gpu=True):
+        """
+        Inicializa el solucionador vectorizado
+        
+        Parameters:
+        -----------
+        k_array : array-like
+            Array de valores k para calcular simultáneamente
+        use_gpu : bool
+            Usar GPU cuando esté disponible
+        """
+        self.k_array = np.asarray(k_array)
+        self.n_k = len(self.k_array)
+        
+        # parámetros cosmológicos
+        self.Om_m_0 = Om_m_0
+        self.Om_r_0 = Om_r_0
+        self.Om_l_0 = 1 - Om_m_0 - Om_r_0
+        self.z_f = z_f
+        self.z_ini_HS = z_ini_HS
+        self.z_0 = z_0
+        self.c = c
+        self.b = b
+        self.h = h
+        self.a_0 = 1/(1 + z_0)
+        
+        # Configurar dispositivo
+        self.device = torch.device('cuda' if use_gpu and torch.cuda.is_available() else 'cpu')
+        print(f"VectorizedDeltaSolver usando: {self.device}")
+        
+        # Convertir arrays a tensores de PyTorch
+        self.k_tensor = torch.tensor(self.k_array, dtype=torch.float64, device=self.device)
+        
+    def H_LCDM_tensor(self, z):
+        """Función H_LCDM vectorizada usando tensores"""
+        z_tensor = torch.tensor(z, dtype=torch.float64, device=self.device)
+        return torch.sqrt(self.Om_r_0 * (1+z_tensor)**4 + self.Om_m_0 * (1+z_tensor)**3 + self.Om_l_0)
+    
+    def dH_dz_lcdm_tensor(self, z):
+        """Derivada de H_LCDM vectorizada"""
+        z_tensor = torch.tensor(z, dtype=torch.float64, device=self.device)
+        H_z_over_H0 = self.H_LCDM_tensor(z)
+        dH = 0.5 * (3*self.Om_m_0*(1+z_tensor)**2 + 4*self.Om_r_0*(1+z_tensor)**3) / H_z_over_H0
+        return dH
+
+    def Gamma_tensor(self, r: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """Función Gamma vectorizada"""
+        return (r + b) * ((r + b)**2 - 2*b) / (4*b*r)
+
+    def condiciones_iniciales_vectorized(self, name='tanh'):
+        """
+        Condiciones iniciales vectorizadas para todos los k's usando la red neuronal
+        """
+        device_nn = torch.device('cpu')  # la red neuronal ENTRENADA funciona en CPU
+        torch.manual_seed(0)
+        model = ImprovedRegressionNN(activation='tanh')
+        folder_path = str(name)
+        network_name = f'_{folder_path}'
+        path_model = f'/home/pedrorozin/scripts/outputs_pedro/neural_networks/{folder_path}/regression_model{network_name}.pth'
+        path_scaler_X = f'/home/pedrorozin/scripts/outputs_pedro/neural_networks/{folder_path}/scaler_X{network_name}.pkl'
+        path_scaler_y = f'/home/pedrorozin/scripts/outputs_pedro/neural_networks/{folder_path}/scaler_y{network_name}.pkl'
+        
+        model.load_state_dict(torch.load(path_model, map_location=device_nn))
+        model.eval()
+        scaler_X = joblib.load(path_scaler_X)
+        scaler_y = joblib.load(path_scaler_y)
+        
+        # Crear batch para todos los k's
+        a_batch = np.full(self.n_k, self.a_0)
+        kh_batch = self.k_array.copy()  # k en unidades 1/Mpc
+        h_batch = np.full(self.n_k, self.h)
+        Omega_m_batch = np.full(self.n_k, self.Om_m_0)
+        
+        X_batch = np.column_stack((a_batch, kh_batch, h_batch, Omega_m_batch))
+        X_scaled = scaler_X.transform(X_batch)
+        X_tensor = torch.tensor(X_scaled, dtype=torch.float32, device=device_nn)
+        
+        with torch.no_grad():
+            y_scaled = model(X_tensor).numpy()
+
+        #ahora tengo un vector de CI's con un k asociado.
+        y_batch = scaler_y.inverse_transform(y_scaled)
+        delta_ini = y_batch[:, 0]  # CI's para delta
+        delta_p_ini = y_batch[:, 1]  # CI's para delta_prime
+        
+        return delta_ini, delta_p_ini
+    
+    def Geff_vectorized(self, z, r_vals, use_tensor_ops=True):
+        """
+        G_efectivo vectorizado para todos los k's con versión optimizada.
+        
+        Parameters:
+        -----------
+        z : float
+            Redshift
+        r_vals : callable or float
+            Valores de r (puede ser función o escalar)
+        use_tensor_ops : bool
+            Si usar operaciones tensoriales (más rápido para GPU/serial)
+            o usar método simple (mejor para multiprocessing)
+        """
+        if use_tensor_ops and torch.cuda.is_available():
+            # versión vectorizada original optimizada para GPU
+            # TO DO: ver si andaría sin usar el GPU (creo q sí, pero creo q es más rápido dividir en jobs)
+            try:
+                if callable(r_vals):
+                    r_val = r_vals(z)
+                else:
+                    r_val = r_vals
+                
+                # Asegurar conversión de tipos robusta
+                z_val = float(np.array(z).item())
+                r_val_float = float(np.array(r_val).item())
+                    
+                # Convertir a tensores
+                z_tensor = torch.tensor(z_val, dtype=torch.float64, device=self.device)
+                r_tensor = torch.tensor(r_val_float, dtype=torch.float64, device=self.device)
+                b_tensor = torch.tensor(self.b, dtype=torch.float64, device=self.device)
+                
+                lamb = 3 * (self.h * 100)**2 * (1 - self.Om_m_0) / self.c**2
+                lamb_tensor = torch.tensor(lamb, dtype=torch.float64, device=self.device)
+                
+                # Calcular para todos los k's simultáneamente usando tensores
+                FR_num = 1 - 2/(b_tensor * (1 + r_tensor/b_tensor)**2)
+                FRR_num = 4/(lamb_tensor * b_tensor**2 * (1 + r_tensor/b_tensor)**3)
+                m = FRR_num/FR_num
+                eps = m * self.k_tensor**2 * (1+z_tensor)**2
+                G_eff = 1/FR_num * (1 + 1/(3 + 1/eps))
+                
+                return G_eff.cpu().numpy()
+                
+            except Exception as e:
+                print(f"Advertencia: Error en versión tensorizada de Geff, usando fallback: {e}")
+                use_tensor_ops = False
+        
+        if not use_tensor_ops:
+            # Versión simple que no usa GPU (mejor para multiprocessing)
+            temp_solver = DeltaSolver(k=0.1, h=self.h, Om_m_0=self.Om_m_0, 
+                                     b=self.b, z_ini_HS=self.z_ini_HS, z_0=self.z_0)
+            
+            G_eff = np.zeros_like(self.k_array)
+            for i, k in enumerate(self.k_array):
+                temp_solver.k = k
+                G_eff[i] = temp_solver.Geff(z, r_vals)
+            
+            return G_eff
+        
+    def solve_delta_mg_vectorized_parallel(self, num_points=1000, n_jobs=16): #16 son la cantidad de cores que tengo yo
+        """
+        Versión paralelizada para resolver las ecuaciones delta para todos los k's
+        usando multiprocessing para distribuir los cálculos de k's entre múltiples procesos.
+        Es una bomba. Y, si hay GPU, más aun.
+        Lo que hace es paralelizar sobre los k's que no se pueden vectorizar por el solve_ivp
+        1. Crea una grilla común de a's para todos los k's
+        2. Usa multiprocessing para resolver cada k en paralelo
+        3. Recolecta y organiza los resultados
+        Parameters:
+        -----------
+        num_points : int
+            Número de puntos en la grilla de a
+        n_jobs : int
+            Número de procesos paralelos a usar. Depende de la cantidad de cores disponibles.
+        Returns:
+        --------
+        a_vec : array
+            Grilla común de factores de escala
+        delta_results : array
+            Resultados de delta para cada k (shape: n_k x len(a_vec))
+        delta_p_results : array
+            Resultados de delta_prime para cada k (shape: n_k x len(a_vec))
+        -----------
+        Note:
+        Esta función requiere que la función `delta_mg` y los métodos relacionados
+        sean compatibles con la paralelización y no dependan de estados compartidos.
+        
+        """
+        from multiprocessing import Pool
+        
+        # Vector de factor de escala (igual para todos los k's)        
+        a_ini = self.a_0
+        a_fin = 1
+        a_vec = np.logspace(np.log10(a_ini), np.log10(a_fin), num_points)
+        
+        # condiciones iniciales vectorizadas
+        delta_ini, delta_p_ini = self.condiciones_iniciales_vectorized()
+        
+        # Preparar argumentos para la función global
+        args_list = []
+        for i, k_val in enumerate(self.k_array):
+            args = (i, k_val, self.h, self.Om_m_0, self.b, self.z_ini_HS, self.z_0, 
+                   delta_ini[i], delta_p_ini[i], a_vec) #son todas las cosas que necesita el DeltaSolver
+            args_list.append(args)
+        
+        print(f"Resolviendo {self.n_k} valores de k en paralelo con {n_jobs} procesos...")
+        
+        # usar multiprocessing con la función global
+        with Pool(n_jobs) as pool:
+            results = pool.map(_process_k_parallel, args_list)
+        
+        # organizar resultados. obtengo una matriz n_k x len(a_vec)
+        delta_results = np.zeros((self.n_k, len(a_vec))) 
+        delta_p_results = np.zeros((self.n_k, len(a_vec)))
+        
+        for i, delta_interp, delta_p_interp in results:
+            delta_results[i, :] = delta_interp
+            delta_p_results[i, :] = delta_p_interp
+        
+        print("Resolución paralela completada.")
+        return a_vec, delta_results, delta_p_results
+    
+    def solve_delta_lcdm_vectorized_parallel(self, num_points=1000, n_jobs=16):
+        """
+        Versión paralelizada para resolver las ecuaciones delta de LCDM para todos los k's
+        usando multiprocessing para distribuir los cálculos de k's entre múltiples procesos.
+        
+        Parameters:
+        -----------
+        num_points : int
+            Número de puntos en la grilla de a
+        n_jobs : int
+            Número de procesos paralelos a usar
+        
+        Returns:
+        --------
+        a_vec : array
+            Grilla común de factores de escala
+        delta_results : array
+            Resultados de delta LCDM para cada k (shape: n_k x len(a_vec))
+        delta_p_results : array
+            Resultados de delta_prime LCDM para cada k (shape: n_k x len(a_vec))
+        """
+        from multiprocessing import Pool
+        
+        # Vector de factor de escala (igual para todos los k's)        
+        a_ini = self.a_0
+        a_fin = 1
+        a_vec = np.logspace(np.log10(a_ini), np.log10(a_fin), num_points)
+        
+        # condiciones iniciales vectorizadas
+        delta_ini, delta_p_ini = self.condiciones_iniciales_vectorized()
+        
+        # Preparar argumentos para la función global LCDM
+        args_list = []
+        for i, k_val in enumerate(self.k_array):
+            args = (i, k_val, self.h, self.Om_m_0, self.z_0, 
+                   delta_ini[i], delta_p_ini[i], a_vec)
+            args_list.append(args)
+        
+        print(f"Resolviendo LCDM para {self.n_k} valores de k en paralelo con {n_jobs} procesos...")
+        
+        # usar multiprocessing con la función global
+        with Pool(n_jobs) as pool:
+            results = pool.map(_process_k_parallel_lcdm, args_list)
+        
+        # organizar resultados
+        delta_results = np.zeros((self.n_k, len(a_vec))) 
+        delta_p_results = np.zeros((self.n_k, len(a_vec)))
+        
+        for i, delta_interp, delta_p_interp in results:
+            delta_results[i, :] = delta_interp
+            delta_p_results[i, :] = delta_p_interp
+        
+        print("Resolución paralela LCDM completada.")
+        return a_vec, delta_results, delta_p_results
+    
+    def solve_delta_mg_vectorized(self, num_points=1000):
+        """
+        Resuelve las ecuaciones delta para todos los k's simultáneamente vectorizándolos.
+        Lo que no puede vectorizar es el solve_ivp, que necesita un k a la vez.
+        """
+        # Vector de factor de escala (igual para todos los k's)
+        a_ini = self.a_0
+        a_fin = 1
+        a_vec = np.logspace(np.log10(a_ini), np.log10(a_fin), num_points)
+        
+        # Condiciones iniciales vectorizadas
+        delta_ini, delta_p_ini = self.condiciones_iniciales_vectorized()
+        
+        # Preparar arrays de salida
+        delta_results = np.zeros((self.n_k, len(a_vec)))
+        delta_p_results = np.zeros((self.n_k, len(a_vec)))
+        
+        # Para cada k, necesitamos resolver individualmente porque solve_ivp no es vectorizable
+        # Pero podemos optimizar con paralelización o GPU para las operaciones internas (tipo Geff)
+        print(f"Resolviendo para {self.n_k} valores de k...")
+        
+        for i, k_val in enumerate(self.k_array):
+            if i % 10 == 0:
+                print(f"Progreso: {i}/{self.n_k} ({100*i/self.n_k:.1f}%)")
+                
+            # Crear solver individual para este k
+            solver_k = DeltaSolver(k=k_val, h=self.h, Om_m_0=self.Om_m_0, 
+                                  b=self.b, z_ini_HS=self.z_ini_HS, z_0=self.z_0)
+            
+            # Usar condiciones iniciales vectorizadas
+            y0 = [delta_ini[i], delta_p_ini[i]]
+            
+            # Resolver
+            try:
+                # Resolver usando exactamente la misma grilla a_vec para todos los k's
+                H_num, H_prime_num, r_num = solver_k.H_HS()
+                
+                def delta_wrapper(a, y):
+                    return solver_k.delta_mg(a, y, H_num, H_prime_num, r_num)
+                
+                # Resolver con la grilla común a_vec
+                sol_MG = solve_ivp(delta_wrapper, [a_ini, a_fin], y0,
+                                  t_eval=a_vec, method='RK45',
+                                  atol=1e-12, rtol=1e-10)
+                
+                delta_results[i, :] = sol_MG.y[0]
+                delta_p_results[i, :] = sol_MG.y[1]
+                
+            except Exception as e:
+                print(f"Error en k={k_val}: {e}")
+                delta_results[i, :] = np.nan
+                delta_p_results[i, :] = np.nan
+        print("Resolución completada.")
+        return a_vec, delta_results, delta_p_results
+
+    def solve_delta_lcdm_vectorized(self, num_points=1000):
+        """
+        Resuelve las ecuaciones delta de LCDM para todos los k's simultáneamente.
+        """
+        # Vector de factor de escala (igual para todos los k's)
+        a_ini = self.a_0
+        a_fin = 1
+        a_vec = np.logspace(np.log10(a_ini), np.log10(a_fin), num_points)
+        
+        # Condiciones iniciales vectorizadas
+        delta_ini, delta_p_ini = self.condiciones_iniciales_vectorized()
+        
+        # Preparar arrays de salida
+        delta_results = np.zeros((self.n_k, len(a_vec)))
+        delta_p_results = np.zeros((self.n_k, len(a_vec)))
+        
+        print(f"Resolviendo LCDM para {self.n_k} valores de k...")
+        
+        for i, k_val in enumerate(self.k_array):
+            if i % 10 == 0:
+                print(f"Progreso LCDM: {i}/{self.n_k} ({100*i/self.n_k:.1f}%)")
+                
+            # Crear solver individual para este k
+            solver_k = DeltaSolver(k=k_val, h=self.h, Om_m_0=self.Om_m_0, z_0=self.z_0)
+            
+            # Usar condiciones iniciales vectorizadas
+            y0 = [delta_ini[i], delta_p_ini[i]]
+            
+            # Resolver
+            try:
+                def delta_wrapper(a, y):
+                    return solver_k.delta_lcdm(a, y)
+                
+                # Resolver con la grilla común a_vec
+                sol_LCDM = solve_ivp(delta_wrapper, [a_ini, a_fin], y0,
+                                    t_eval=a_vec, method='RK45',
+                                    atol=1e-12, rtol=1e-10)
+                
+                delta_results[i, :] = sol_LCDM.y[0]
+                delta_p_results[i, :] = sol_LCDM.y[1]
+                
+            except Exception as e:
+                print(f"Error en k={k_val} (LCDM): {e}")
+                delta_results[i, :] = np.nan
+                delta_p_results[i, :] = np.nan
+                
+        print("Resolución LCDM completada.")
+        return a_vec, delta_results, delta_p_results
+
+    def compute_sigma8(self, deltas, k=None, R=8.0, h=None, n_s=0.9665, A_s=2e-9, k_pivot=0.05):
+        """
+        Calcula σ8(z) para un solo k en el redshift dado.
+        Esto es, σ8(z) = [ ∫ (k^2 P(k,z) W^2(kR) dk) / (2π^2) ]^0.5,
+        con P(k,z) = As (k/k_piv)^(n_s-1) * δ^2(k,z).
+        Args:
+            deltas : array de n_a
+                Array de δ(k,z) para un solo k en el redshift dado
+            k : array de n_k
+                Array de valores k correspondientes a los deltas
+            R : float
+                Radio en Mpc/h para σ8 (default 8 Mpc/h)
+            h : float
+                Parámetro h (default 0.68)
+            n_s : float
+                Índice espectral primordial (default 0.9665)
+            A_s : float
+                Amplitud del espectro primordial (default 2e-9)
+        Returns:
+            sigma8_z : array de n_a
+                Array de σ8(z) para cada redshift en deltas
+        -----------    
+        """
+        # Usar valores por defecto si no se especifican
+        if k is None:
+            k = self.k_array
+        if h is None:
+            h = self.h
+        
+        # Power spectrum primordial
+        R = R / h  # convertir R a Mpc (sin usar torch)
+        P_k_prim = A_s * (k/k_pivot)**(n_s-1) * (2*np.pi**2)
+        
+        #window function:
+        # argumento de window function
+        kR = k * R #k tiene que entrar en 1/Mpc
+        #TO DO: manejar k=0
+        #raise error if k contains 0
+        if np.any(kR == 0):
+            raise ValueError("k contiene 0, lo que causa división por cero en la función ventana W(kR).")
+        W_kR = 3 * (np.sin(kR) - kR * np.cos(kR)) / (kR**3) #tener cuidado de no meter k=0
+
+        # integrando
+        integrando = (k**2 * 
+                     P_k_prim * 
+                     W_kR**2 * 
+                     deltas**2)
+        
+        integral = simpson(integrando, x=k)
+        sigma8_z = np.sqrt(integral)
+        
+        return sigma8_z
+
+    def compute_sigma8_vectorized(self, deltas, k=None, R=8.0, h=None, n_s=0.9665, A_s=2e-9, use_parallel=True, n_jobs=16):
+        """
+        Calcula σ8(z) para todos los k's en el redshift dado.
+        Esto es, σ8(z) = [ ∫ (k^2 P(k,z) W^2(kR) dk) / (2π^2) ]^0.5,
+        con P(k,z) = As (k/k_piv)^(n_s-1) * δ^2(k,z) y W(kR) la window function esférica.
+        Args:
+            deltas : array de (n_k x n_a). necesito integrarlo en k (axis = 0)
+                Array de δ(k,z) para todos los k's en el redshift dado
+            k : array de n_k
+                Array de valores k correspondientes a los deltas
+            R : float
+                Radio en Mpc/h para σ8 (default 8 Mpc/h)
+            h : float
+                Parámetro h (default 0.68)
+            n_s : float
+                Índice espectral primordial (default 0.9665)
+            A_s : float
+                Amplitud del espectro primordial (default 2e-9)
+            use_parallel : bool
+                Usar paralelización para la integración (default True)
+            n_jobs : int
+                Número de procesos paralelos (default 16 por cantidad de cores que tengo yo)
+        Returns:
+            sigma8_z : array de n_a (debería coincidir con num_points)
+                Array de σ8(z) para cada redshift en deltas
+        -----------      
+        """
+        # Usar valores por defecto si no se especifican
+        if k is None:
+            k = self.k_array
+        if h is None:
+            h = self.h
+            
+        # Power spectrum primordial
+        R = R / h  # convertir R a Mpc (sin usar torch)
+        P_k_prim = A_s * (k/0.05)**(n_s-1) * (2*np.pi**2)
+        
+        #window function:
+        # argumento de window function
+        kR = self.k_array * R #k tiene que entrar en 1/Mpc
+        W_kR = 3 * (np.sin(kR) - kR * np.cos(kR)) / (kR**3) #tener cuidado de no meter k=0
+
+        # integrando
+        integrando = (self.k_array[:, np.newaxis]**2 * 
+                     P_k_prim[:, np.newaxis] * 
+                     W_kR[:, np.newaxis]**2 * 
+                     deltas**2)
+        sigma8_z = np.zeros(deltas.shape[1])
+        #integrar integrando en k (axis=0). Resolver en paralelo (simpson no puede vectorizarse)
+        for i in range(deltas.shape[1]):
+            if use_parallel and self.n_k > 10:
+                # usar paralelización si hay suficientes k's
+                from multiprocessing import Pool
+                
+                with Pool(n_jobs) as pool:
+                    chunk_size = int(np.ceil(self.n_k / n_jobs))
+                    chunks = [integrando[j:j+chunk_size, i] for j in range(0, self.n_k, chunk_size)]
+                    k_chunks = [self.k_array[j:j+chunk_size] for j in range(0, self.n_k, chunk_size)]
+                    chunk_args = list(zip(chunks, k_chunks))
+                    results = pool.map(_simpson_chunk, chunk_args)
+                integral = sum(results)
+            else:
+                integral = simpson(integrando[:, i], x=self.k_array)
+            sigma8_z[i] = np.sqrt(integral)
+        
+        return sigma8_z
+   
+    def compute_f_k_vectorized(self, a_vec, delta, delta_p):
+        """
+        Calcula f(k,z) = d ln δ / d ln a = a δ'/δ para todos los k's.
+        delta y delta_p son arrays de shape (n_k x n_a)
+        Args:
+        -----
+        delta : array (matriz de n_k x num_points)
+            Array de δ(k,z) para todos los k's y z
+        delta_p : array (matriz de n_k x num_points)
+            Array de δ'(k,z) para todos los k's y z
+        a_vec : array (vector de n_a = num_points)
+            Array de factores de escala a para cada redshift
+        -----------
+        Returns:
+        k_array : array
+            Array de valores k
+        z_vec : array
+            Array de valores z correspondientes a a_vec
+        f_k : array (matriz de n_k x num_points)
+            Array de valores f(k,z) para todos los k's y z
+        -----------
+        Note:
+        Esta función asume que delta y delta_p tienen la misma shape y
+        que a_vec tiene la misma longitud que el número de columnas en delta.
+        Si delta y delta_p son de LCDM, usar f(z,k) coincide con f(z), pues es scale invariant.
+        """      
+        z_vec = 1/a_vec - 1
+
+        f_k = (a_vec * delta_p) / delta
+        f_k[~np.isfinite(f_k)] = 0.0
+        return self.k_array, z_vec, f_k
+
+    def compute_f_k_lcdm_vectorized(self, z_select, use_parallel=True, n_jobs=4):
+        """
+        Calcula f(k,z) = d ln δ / d ln a para LCDM para todos los k's en el redshift dado
+        """
+        # Resolver para todos los k's usando LCDM
+        if use_parallel and self.n_k > 10:  # usar paralelo si hay suficientes k's
+            a_vec, delta_results, delta_p_results = self.solve_delta_lcdm_vectorized_parallel(n_jobs=n_jobs)
+        else:
+            a_vec, delta_results, delta_p_results = self.solve_delta_lcdm_vectorized()
+        
+        # Encontrar índice más cercano al redshift deseado
+        z_vec = 1/a_vec - 1
+        idx_z = np.argmin(np.abs(z_vec - z_select))
+        a_target = a_vec[idx_z]
+        
+        # Calcular f(k,z) para todos los k's
+        delta_at_z = delta_results[:, idx_z]
+        delta_p_at_z = delta_p_results[:, idx_z]
+        
+        # f(k,z) = d ln δ / d ln a = (a/δ) * dδ/da
+        f_k = np.zeros(self.n_k)
+        for i in range(self.n_k):
+            if np.abs(delta_at_z[i]) > 1e-16:
+                f_k[i] = (a_target * delta_p_at_z[i]) / delta_at_z[i]
+            else:
+                f_k[i] = 0.0
+        
+        return self.k_array, f_k, delta_at_z
+    
+    def compute_f_with_f_k(self, z_vec, f_k_array, x_array=None, k_array=None, use_mg_hubble=True):
+        """
+        Calcula f(z) a partir de la transformada de Fourier de f(k,z).
+
+        
+        f(z) = (1/2π²) ∫ k² f(k,z) sinc(k·x(z)) dk
+
+        donde x(z) es la distancia comoving:
+        x(z) = ∫_0^z c dz'/H(z')
+
+        Para gravedad modificada, se usa H_HS(z) en lugar de H_LCDM(z).
+
+        Args:
+        -----
+        z_vec : array
+            Array de valores z correspondientes a las columnas de f_k_array
+        f_k_array : array (n_k x n_z)
+            Array de valores f(k,z) para todos los k's y z
+        k_array : array (opcional)
+            Array de valores k. Si None, usa un array default
+            Array de valores k. Si None, usa un array default
+        use_mg_hubble : bool
+            Si True, usa H_HS para gravedad modificada. Si False, usa H_LCDM.
+
+        Returns:
+        --------
+        f_z : array (n_z,)
+            Array 1D de valores f(z) para cada redshift en z_vec
+        """
+        if k_array is None:
+            k_array = np.logspace(-3, 1, f_k_array.shape[0])  # Default k range
+        if f_k_array.shape[0] != len(k_array):
+            raise ValueError("f_k_array debe tener la misma cantidad de filas que k_array.")
+        # if x_array is None:
+        #     x_array = np.logspace(2*np.pi/np.log(max(k_array), 2*np.pi/min(k_array)), len(k_array))
+        if f_k_array.shape[1] != len(z_vec):
+            raise ValueError("f_k_array debe tener la misma cantidad de columnas que z_vec.")
+
+        solver = DeltaSolver(k=0.1, h=self.h, Om_m_0=self.Om_m_0, 
+                             b=self.b, z_ini_HS=self.z_ini_HS, z_0=self.z_0) #lo necesito para H_LCDM y H_HS (no dependen de k)
+        # defino mi H(z) según si uso MG o no
+        if use_mg_hubble:
+            try:
+                H_num, H_prime_num, r_num = solver.H_HS()
+                def H_function(z): #esto es por si se le pasa un único escalar
+                    if np.isscalar(z):
+                        return H_num(z) if z <= self.z_ini_HS else self.H_LCDM_tensor(z)
+                    else: 
+                        result = np.zeros_like(z)
+                        mask_mg = (z <= self.z_ini_HS) #mask de dónde usar H_HS (False si LCDM)
+                        result[mask_mg] = H_num(z[mask_mg])
+                        # Convertir tensor a numpy
+                        H_lcdm_result = self.H_LCDM_tensor(z[~mask_mg])
+                        result[~mask_mg] = H_lcdm_result.cpu().numpy() if hasattr(H_lcdm_result, 'cpu') else H_lcdm_result
+                        return result
+            except:
+                print("Warning: No se pudo calcular H_HS, usando H_LCDM_tensor")
+                def H_function_fallback(z_input):
+                    H_result = self.H_LCDM_tensor(z_input)
+                    return H_result.cpu().numpy() if hasattr(H_result, 'cpu') else H_result
+                H_function = H_function_fallback
+        else:
+            def H_function_wrapper(z_input):
+                H_result = self.H_LCDM_tensor(z_input)
+                return H_result.cpu().numpy() if hasattr(H_result, 'cpu') else H_result
+            H_function = H_function_wrapper
+
+        # calcular distancias físicas x(z) = ∫_0^z c/H(z') dz' para cada z
+        x_fisico = np.zeros_like(z_vec)
+        c = self.c
+        for i, z in enumerate(z_vec):
+            
+            z_int = np.linspace(0, z, 1000)
+            H_int = H_function(z_int)*self.h*100  # recordar que la función devolvía H(z)/H0)
+            # Integrar c/H(z') dz' hasta z
+            x_fisico[i] = simpson(c/H_int, x=z_int)
+         
+
+        def sinc_normalized(u):
+            return np.sinc(u)  # np.sinc ya maneja bien el caso u=0
+
+        # Calcular f(z) usando la transformada de Fourier con x(z) conocido
+        f_z = np.zeros(len(z_vec))
+
+        for i, (z, x_z) in enumerate(zip(z_vec, x_fisico)):
+            # Para cada z, usar su x(z) correspondiente
+            # Integrando: k² f(k,z) sinc(k·x(z)) dk
+            integrando = (k_array**2) * f_k_array[:, i] * sinc_normalized(k_array * x_z)
+
+            # Integrar sobre k
+            f_z[i] = simpson(integrando, x=k_array) / (2 * np.pi**2)
+
+        return f_z
+
+    
 
 def calculate_delta_mg(z_ini_HS=25,Om_m_0=0.305, k=0.1, b=0.1, num_points=1000):
     solver = DeltaSolver(z_ini_HS=z_ini_HS,Om_m_0=Om_m_0,b=b,k=k)
@@ -331,3 +1133,99 @@ def calculate_delta_mg(z_ini_HS=25,Om_m_0=0.305, k=0.1, b=0.1, num_points=1000):
 def calculate_delta_lcdm(Om_m_0=0.305, num_points=1000):
     solver = DeltaSolver(Om_m_0=Om_m_0)
     return solver.solve_delta_lcdm(num_points)
+
+def calculate_fs8_vectorized(k_array, z_select, b_select=0.1, params=None, use_gpu=True):
+    """
+    Función de conveniencia para calcular f*sigma8 usando el solver vectorizado
+    """
+    if params is None:
+        params = {'h': 0.68, 'Om_m': 0.3}
+    
+    # Crear solver vectorizado
+    solver = VectorizedDeltaSolver(
+        k_array=k_array,
+        Om_m_0=params['Om_m'],
+        h=params['h'],
+        b=b_select,
+        use_gpu=use_gpu
+    )
+    
+    # Calcular power spectrum y f(k)
+    k_calc, P_k, f_k = solver.compute_power_spectrum_vectorized(z_select)
+    
+    return k_calc, P_k, f_k
+
+def calculate_fs8_vectorized_parallel(k_array, z_select, b_select=0.1, params=None, 
+                                    use_gpu=True, n_jobs=4):
+    """
+    Función de conveniencia para calcular f*sigma8 usando el solver vectorizado con paralelización
+    """
+    if params is None:
+        params = {'h': 0.68, 'Om_m': 0.3}
+    
+    # Crear solver vectorizado
+    solver = VectorizedDeltaSolver(
+        k_array=k_array,
+        Om_m_0=params['Om_m'],
+        h=params['h'],
+        b=b_select,
+        use_gpu=use_gpu
+    )
+    
+    # Calcular power spectrum y f(k) con paralelización
+    k_calc, P_k, f_k = solver.compute_power_spectrum_vectorized(z_select, use_parallel=True, n_jobs=n_jobs)
+    
+    return k_calc, P_k, f_k
+
+
+
+
+def calculate_sigma8_lcdm_evolution(k_array, params=None, use_gpu=True, n_jobs=4, num_points=1000):
+    """
+    Función de conveniencia para calcular la evolución σ8(z) de LCDM
+    
+    Args:
+        k_array : array
+            Array de valores k para la integración
+        params : dict
+            Parámetros cosmológicos {'h': float, 'Om_m': float}
+        use_gpu : bool
+            Usar GPU cuando esté disponible
+        n_jobs : int
+            Número de procesos paralelos
+        num_points : int
+            Número de puntos en la grilla de a
+            
+    Returns:
+        a_vec : array
+            Factores de escala
+        z_vec : array
+            Redshifts correspondientes
+        sigma8_z : array
+            σ8(z) para LCDM
+        delta_results : array
+            Matriz de δ(k,z) (n_k x num_points)
+    """
+    if params is None:
+        params = {'h': 0.68, 'Om_m': 0.3}
+    
+    # Crear solver vectorizado
+    solver = VectorizedDeltaSolver(
+        k_array=k_array,
+        Om_m_0=params['Om_m'],
+        h=params['h'],
+        use_gpu=use_gpu
+    )
+    
+    # Resolver las ecuaciones para todos los k's y todos los a's
+    a_vec, delta_results, delta_p_results = solver.solve_delta_lcdm_vectorized_parallel(
+        num_points=num_points, n_jobs=n_jobs
+    )
+    
+    # Calcular σ8(z) para cada redshift
+    sigma8_z = solver.compute_sigma8_lcdm_vectorized(delta_results, use_parallel=True, n_jobs=n_jobs)
+    
+    # Calcular redshifts correspondientes
+    z_vec = 1/a_vec - 1
+    
+    return a_vec, z_vec, sigma8_z, delta_results
