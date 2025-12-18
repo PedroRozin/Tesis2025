@@ -23,7 +23,9 @@ default_b=0.1
 default_k=0.01
 default_h = .68
 
-# Función global para paralelización 
+# funciones globales para paralelización
+# por alguna razón, para paralelizar no puedo tener las integraciones como métodos de la clase
+# se usan para calcular las deltas de manera paralela y sigma8 (se integra en k para cada z)
 def _process_k_parallel(args):
     """
     Función global para procesar cada k en paralelo.
@@ -90,7 +92,13 @@ def _process_k_parallel_lcdm(args):
 
 
 def _simpson_chunk(args):
-    """Función auxiliar para paralelizar simpson"""
+    """Función auxiliar para paralelizar simpson
+    Args:
+         args: tupla (y_chunk, x_chunk). pensada para recibir de multiprocessing
+         
+
+    """
+
     y_chunk, x_chunk = args
     return simpson(y_chunk, x=x_chunk)
 
@@ -590,7 +598,7 @@ class VectorizedDeltaSolver:
                 else:
                     r_val = r_vals
                 
-                # Asegurar conversión de tipos robusta
+                # conversión a float de los elementos
                 z_val = float(np.array(z).item())
                 r_val_float = float(np.array(r_val).item())
                     
@@ -849,73 +857,24 @@ class VectorizedDeltaSolver:
         print("Resolución LCDM completada.")
         return a_vec, delta_results, delta_p_results
 
-    def compute_sigma8(self, deltas, k=None, R=8.0, h=None, n_s=0.9665, A_s=2e-9, k_pivot=0.05):
-        """
-        Calcula σ8(z) para un solo k en el redshift dado.
-        Esto es, σ8(z) = [ ∫ (k^2 P(k,z) W^2(kR) dk) / (2π^2) ]^0.5,
-        con P(k,z) = As (k/k_piv)^(n_s-1) * δ^2(k,z).
-        Args:
-            deltas : array de n_a
-                Array de δ(k,z) para un solo k en el redshift dado
-            k : array de n_k
-                Array de valores k correspondientes a los deltas
-            R : float
-                Radio en Mpc/h para σ8 (default 8 Mpc/h)
-            h : float
-                Parámetro h (default 0.68)
-            n_s : float
-                Índice espectral primordial (default 0.9665)
-            A_s : float
-                Amplitud del espectro primordial (default 2e-9)
-        Returns:
-            sigma8_z : array de n_a
-                Array de σ8(z) para cada redshift en deltas
-        -----------    
-        """
-        # Usar valores por defecto si no se especifican
-        if k is None:
-            k = self.k_array
-        if h is None:
-            h = self.h
-        
-        # Power spectrum primordial
-        R = R / h  # convertir R a Mpc (sin usar torch)
-        P_k_prim = A_s * (k/k_pivot)**(n_s-1) * (2*np.pi**2)
-        
-        #window function:
-        # argumento de window function
-        kR = k * R #k tiene que entrar en 1/Mpc
-        #TO DO: manejar k=0
-        #raise error if k contains 0
-        if np.any(kR == 0):
-            raise ValueError("k contiene 0, lo que causa división por cero en la función ventana W(kR).")
-        W_kR = 3 * (np.sin(kR) - kR * np.cos(kR)) / (kR**3) #tener cuidado de no meter k=0
-
-        # integrando
-        integrando = (k**2 * 
-                     P_k_prim * 
-                     W_kR**2 * 
-                     deltas**2)
-        
-        integral = simpson(integrando, x=k)
-        sigma8_z = np.sqrt(integral)
-        
-        return sigma8_z
-
-    def compute_sigma8_vectorized(self, deltas, k=None, R=8.0, h=None, n_s=0.9665, A_s=2e-9, use_parallel=True, n_jobs=16):
+    def compute_sigma8_vectorized(self, deltas= None, k=None, R=8.0, h=None, lcdm = False, z_start = 2, n_s=0.9665, A_s=2e-9, use_parallel=True, n_jobs=16):
         """
         Calcula σ8(z) para todos los k's en el redshift dado.
         Esto es, σ8(z) = [ ∫ (k^2 P(k,z) W^2(kR) dk) / (2π^2) ]^0.5,
         con P(k,z) = As (k/k_piv)^(n_s-1) * δ^2(k,z) y W(kR) la window function esférica.
         Args:
-            deltas : array de (n_k x n_a). necesito integrarlo en k (axis = 0)
-                Array de δ(k,z) para todos los k's en el redshift dado
+            deltas : array de (n_k x n_a). If None, los calcula usando LCDM o MG (default MG)
+                Array de δ(k,z) para todos los k's en el redshift dado. necesito integrarlo en k (axis = 0)
             k : array de n_k
                 Array de valores k correspondientes a los deltas
             R : float
                 Radio en Mpc/h para σ8 (default 8 Mpc/h)
             h : float
                 Parámetro h (default 0.68)
+            lcdm : bool
+                Si True, usa LCDM para calcular deltas si no se pasan (default False)
+            z_start: float or int
+                Redshift inicial para 
             n_s : float
                 Índice espectral primordial (default 0.9665)
             A_s : float
@@ -929,23 +888,35 @@ class VectorizedDeltaSolver:
                 Array de σ8(z) para cada redshift en deltas
         -----------      
         """
-        # Usar valores por defecto si no se especifican
+
+        if deltas is None:
+            if lcdm:
+                a, deltas, _dp = self.solve_delta_lcdm_vectorized()
+            else:
+                a, deltas, _dp = self.solve_delta_mg_vectorized()
+            z = 1/a - 1
+            # seleccionar solo los z's mayores al z_start
+            mask = z <= z_start
+            a = a[mask]
+            deltas=deltas[:, mask] #recordar que deltas es (n_k x n_a)
+            
         if k is None:
             k = self.k_array
         if h is None:
             h = self.h
-            
-        # Power spectrum primordial
-        R = R / h  # convertir R a Mpc (sin usar torch)
+
+
+        # primordial power spec
+        R = R / h  # convertir R a Mpc
         P_k_prim = A_s * (k/0.05)**(n_s-1) * (2*np.pi**2)
         
         #window function:
         # argumento de window function
         kR = self.k_array * R #k tiene que entrar en 1/Mpc
-        W_kR = 3 * (np.sin(kR) - kR * np.cos(kR)) / (kR**3) #tener cuidado de no meter k=0
+        W_kR = 3 * (np.sin(kR) - kR * np.cos(kR)) / (kR**3) #tener cuidado de no meter k=0. to do: manejarlo
 
         # integrando
-        integrando = (self.k_array[:, np.newaxis]**2 * 
+        integrando = (self.k_array[:, np.newaxis]**2 * #el newaxis es para que quede shape (n_k x 1) y pueda multiplicar por deltas (n_k x n_a)
                      P_k_prim[:, np.newaxis] * 
                      W_kR[:, np.newaxis]**2 * 
                      deltas**2)
@@ -1001,41 +972,122 @@ class VectorizedDeltaSolver:
         f_k[~np.isfinite(f_k)] = 0.0
         return self.k_array, z_vec, f_k
 
-    def compute_f_k_lcdm_vectorized(self, z_select, use_parallel=True, n_jobs=4):
-        """
-        Calcula f(k,z) = d ln δ / d ln a para LCDM para todos los k's en el redshift dado
-        """
-        # Resolver para todos los k's usando LCDM
-        if use_parallel and self.n_k > 10:  # usar paralelo si hay suficientes k's
-            a_vec, delta_results, delta_p_results = self.solve_delta_lcdm_vectorized_parallel(n_jobs=n_jobs)
-        else:
-            a_vec, delta_results, delta_p_results = self.solve_delta_lcdm_vectorized()
-        
-        # Encontrar índice más cercano al redshift deseado
-        z_vec = 1/a_vec - 1
-        idx_z = np.argmin(np.abs(z_vec - z_select))
-        a_target = a_vec[idx_z]
-        
-        # Calcular f(k,z) para todos los k's
-        delta_at_z = delta_results[:, idx_z]
-        delta_p_at_z = delta_p_results[:, idx_z]
-        
-        # f(k,z) = d ln δ / d ln a = (a/δ) * dδ/da
-        f_k = np.zeros(self.n_k)
-        for i in range(self.n_k):
-            if np.abs(delta_at_z[i]) > 1e-16:
-                f_k[i] = (a_target * delta_p_at_z[i]) / delta_at_z[i]
-            else:
-                f_k[i] = 0.0
-        
-        return self.k_array, f_k, delta_at_z
     
-    def compute_f_with_f_k(self, z_vec, f_k_array, x_array=None, k_array=None, use_mg_hubble=True):
+    def compute_f_with_f_k(self, z_vec, f_k_array, x_array=None, k_array=None, use_mg_hubble=True, debug = False):
         """
         Calcula f(z) a partir de la transformada de Fourier de f(k,z).
 
         
         f(z) = (1/2π²) ∫ k² f(k,z) sinc(k·x(z)) dk
+
+        donde x(z) es la distancia comoving:
+        x(z) = ∫_0^z c dz'/H(z')
+
+        Para gravedad modificada, se usa H_HS(z) en lugar de H_LCDM(z).
+
+        Args:
+        -----
+        z_vec : array
+            Array de valores z correspondientes a las columnas de f_k_array
+        f_k_array : array (n_k x n_z)
+            Array de valores f(k,z) para todos los k's y z
+        k_array : array (opcional)
+            Array de valores k. Si None, usa un array default
+            Array de valores k. Si None, usa un array default
+        use_mg_hubble : bool
+            Si True, usa H_HS para gravedad modificada. Si False, usa H_LCDM.
+
+        Returns:
+        --------
+        f_z : array (n_z,)
+            Array 1D de valores f(z) para cada redshift en z_vec
+        """
+        if k_array is None:
+            # k_array = np.logspace(-3, 1, f_k_array.shape[0])  # Default k range
+            k_array = self.k_array
+        if f_k_array.shape[0] != len(k_array):
+            raise ValueError("f_k_array debe tener la misma cantidad de filas que k_array.")
+        # if x_array is None:
+        #     x_array = np.logspace(2*np.pi/np.log(max(k_array), 2*np.pi/min(k_array)), len(k_array))
+        if f_k_array.shape[1] != len(z_vec):
+            raise ValueError("f_k_array debe tener la misma cantidad de columnas que z_vec.")
+
+        solver = DeltaSolver(k=0.1, h=self.h, Om_m_0=self.Om_m_0, 
+                             b=self.b, z_ini_HS=self.z_ini_HS, z_0=self.z_0) #lo necesito para H_LCDM y H_HS (no dependen de k)
+        # defino mi H(z) según si uso MG o no
+        if use_mg_hubble:
+            try:
+                H_num, H_prime_num, r_num = solver.H_HS()
+                def H_function(z): #esto es por si se le pasa un único escalar
+                    if np.isscalar(z):
+                        return H_num(z) if z <= self.z_ini_HS else self.H_LCDM_tensor(z)
+                    else: 
+                        result = np.zeros_like(z)
+                        mask_mg = (z <= self.z_ini_HS) #mask de dónde usar H_HS (False si LCDM)
+                        result[mask_mg] = H_num(z[mask_mg])
+                        # tensor a numpy
+                        H_lcdm_result = self.H_LCDM_tensor(z[~mask_mg])
+                        result[~mask_mg] = H_lcdm_result.cpu().numpy() if hasattr(H_lcdm_result, 'cpu') else H_lcdm_result
+                        return result
+            except:
+                print("Warning: No se pudo calcular H_HS, usando H_LCDM_tensor")
+                def H_function_fallback(z_input):
+                    H_result = self.H_LCDM_tensor(z_input)
+                    return H_result.cpu().numpy() if hasattr(H_result, 'cpu') else H_result
+                H_function = H_function_fallback
+        else:
+            def H_function_wrapper(z_input):
+                H_result = self.H_LCDM_tensor(z_input)
+                return H_result.cpu().numpy() if hasattr(H_result, 'cpu') else H_result
+            H_function = H_function_wrapper
+
+        # calcular distancias físicas x(z) = ∫_0^z c/H(z') dz' para cada z
+        x_fisico = np.zeros_like(z_vec)
+        # c = self.c * 3.24078e-20  # velocidad de la luz en Mpc/s
+        c = self.c  # velocidad de la luz en km/s
+        
+        if debug:
+            print('DEBUG: Calculando distancias físicas x(z)')
+  
+        H_values_in_z = np.zeros_like(z_vec)
+        H_values_in_z_vec = H_function(z_vec)*(self.h*100)  # recordar que la función devolvía H(z)/H0) esto debería estar en km/s/Mpc
+        for i, z in enumerate(z_vec):
+            
+            z_int = np.logspace(np.log10(0.0001), np.log10(z), 1000)
+            H_int = H_function(z_int)*(self.h*100)  # recordar que la función devolvía H(z)/H0) esto debería estar en km/s/Mpc
+            # H_int = H_function(z_int)
+            # Integrar c/H(z') dz' hasta z
+            x_fisico[i] = simpson(c/H_int, x=z_int)
+            if debug:
+                if i % 10 == 0:
+                    print(f'En z={z:.2f}, x(z)={x_fisico[i]:.2f} Mpc. La integral da (sin ctes).: {x_fisico[i]*self.h*100/c:.2f} Mpc')
+                    # print(f'En z={z:.2f}, x(z)={x_fisico[i]:.3f} Mpc')
+                    #append H values in z of z_vec for debug
+                    H_values_in_z[i] = H_function(z)*(self.h*100)
+
+        sinc = lambda u: np.sinc(u)
+
+        # Calcular f(z) usando la transformada de Fourier con x(z) conocido
+        f_z = np.zeros(len(z_vec))
+        r= 8/self.h #radio en Mpc/h
+        for i, (z, x_z) in enumerate(zip(z_vec, x_fisico)):
+            # Para cada z, usar su x(z) correspondiente
+            # Integrando: k² f(k,z) sinc(k·x(z)) dk
+            integrando = (k_array**2) * f_k_array[:, i] * sinc(k_array * x_z)
+
+            # Integrar sobre k
+            f_z[i] = simpson(integrando, x=k_array)
+        if debug:
+            return f_z,  H_values_in_z_vec, z_vec, x_fisico
+        else:
+            return f_z
+
+    def compute_f_with_f_k_exp(self, z_vec, f_k_array, x_array=None, k_array=None, use_mg_hubble=True):
+        """
+        Calcula f(z) a partir de la transformada de Fourier de f(k,z).
+
+
+        f(z) = (1/2π²) ∫ k² f(k,z) e(i k·x(z)) dk
 
         donde x(z) es la distancia comoving:
         x(z) = ∫_0^z c dz'/H(z')
@@ -1081,7 +1133,7 @@ class VectorizedDeltaSolver:
                         result = np.zeros_like(z)
                         mask_mg = (z <= self.z_ini_HS) #mask de dónde usar H_HS (False si LCDM)
                         result[mask_mg] = H_num(z[mask_mg])
-                        # Convertir tensor a numpy
+                        # tensor a numpy
                         H_lcdm_result = self.H_LCDM_tensor(z[~mask_mg])
                         result[~mask_mg] = H_lcdm_result.cpu().numpy() if hasattr(H_lcdm_result, 'cpu') else H_lcdm_result
                         return result
@@ -1100,31 +1152,30 @@ class VectorizedDeltaSolver:
         # calcular distancias físicas x(z) = ∫_0^z c/H(z') dz' para cada z
         x_fisico = np.zeros_like(z_vec)
         c = self.c
+
         for i, z in enumerate(z_vec):
             
             z_int = np.linspace(0, z, 1000)
-            H_int = H_function(z_int)*self.h*100  # recordar que la función devolvía H(z)/H0)
+            H_int = H_function(z_int)*self.h*100  # recordar que la función devolvía H(z)/H0). esto debería estar en km/s/Mpc
             # Integrar c/H(z') dz' hasta z
             x_fisico[i] = simpson(c/H_int, x=z_int)
          
 
-        def sinc_normalized(u):
-            return np.sinc(u)  # np.sinc ya maneja bien el caso u=0
+        def exp(u):
+            return np.exp(1j * u)  #
 
         # Calcular f(z) usando la transformada de Fourier con x(z) conocido
         f_z = np.zeros(len(z_vec))
 
         for i, (z, x_z) in enumerate(zip(z_vec, x_fisico)):
             # Para cada z, usar su x(z) correspondiente
-            # Integrando: k² f(k,z) sinc(k·x(z)) dk
-            integrando = (k_array**2) * f_k_array[:, i] * sinc_normalized(k_array * x_z)
+            # Integrando: k² f(k,z) e(i k·x(z)) dk
+            integrando = (k_array**2) * f_k_array[:, i] * exp(k_array * x_z)
 
-            # Integrar sobre k
+            # Integrar sobre k. quedarme con la parte real
             f_z[i] = simpson(integrando, x=k_array) / (2 * np.pi**2)
 
         return f_z
-
-    
 
 def calculate_delta_mg(z_ini_HS=25,Om_m_0=0.305, k=0.1, b=0.1, num_points=1000):
     solver = DeltaSolver(z_ini_HS=z_ini_HS,Om_m_0=Om_m_0,b=b,k=k)
