@@ -3351,7 +3351,7 @@ int perturbations_prepare_k_output(struct background * pba,
       /* Interacting dark matter */
       class_store_columntitle(ppt->scalar_titles,"delta_idm",pba->has_idm);
       class_store_columntitle(ppt->scalar_titles,"theta_idm",pba->has_idm);
-      /*acá guardo las columntitles para después sacarlas como keys*/
+      /*acá guardo las columntitles para después sacarlas como keys. COMENTADO XQ NO LO USO AL FINAL*/
       // class_store_columntitle(ppt->scalar_titles, "delta_prime_cdm", ppt->has_source_delta_prime_cdm);
       // class_store_columntitle(ppt->scalar_titles, "delta_prime_b", ppt->has_source_delta_b);
       /* Non-cold dark matter */
@@ -7800,39 +7800,8 @@ int perturbations_sources(
     /*acá agrego el set sources para las derivadas. HAY QUE VER LO DEL N-BODY GAUGE CORRECTION*/
     if (ppt->has_source_delta_prime_cdm == _TRUE_) {
     _set_source_(ppt->index_tp_delta_prime_cdm) = dy[ppw->pv->index_pt_delta_cdm];
-    /*print values i am saving*/
-    // printf("a = %e, delta_prime_cdm_source = %e\n",a, _set_source_(ppt->index_tp_delta_prime_cdm));
-    /*write these values and k in a file*/
-    // FILE *fp;
-    // fp = fopen("delta_prime_cdm_source.txt", "a");
-    // /*print a and delta_prime_cdm in the first row*/
-    // // fprintf(fp, "# k = %e\n", k);
-    // // fprintf(fp, "# a delta_prime_cdm\n");
-    // fprintf(fp, "%e %e\n", a, _set_source_(ppt->index_tp_delta_prime_cdm));
-    // fclose(fp);
+
     }
-
-    
-    /*comento lo de arriba y hago cambios de chat gpt:*/
-    // if (ppt->gauge == newtonian) {
-    //   _set_source_(ppt->index_tp_delta_prime_cdm) =
-    //     -(y[ppw->pv->index_pt_theta_cdm] - 3. * pvecmetric[ppw->index_mt_phi_prime]);
-    //     /*print what i am saving:*/
-    //   printf("a = %e, delta_prime_cdm_source = %e\n",a, _set_source_(ppt->index_tp_delta_prime_cdm));
-    //   /*write these values in a file:*/
-    //   FILE *fp;
-    //   fp = fopen("delta_prime_cdm_source.txt", "a");
-    //   /*print a and delta_prime_cdm in the first row*/
-    //   fprintf(fp, "# a delta_prime_cdm\n");
-    //   fprintf(fp, "%e %e\n", a, _set_source_(ppt->index_tp_delta_prime_cdm));
-    //   fclose(fp);
-    // }
-
-    // // prueba 2 con delta_prime_cdm
-    // if (ppt->gauge == newtonian) {
-    //   delta_prime_cdm = -(y[ppw->pv->index_pt_theta_cdm] - 3. * pvecmetric[ppw->index_mt_phi_prime]);
-    // }
-
 
     /*DEBUG_*/
     // printf("a = %e, delta_prime_cdm_source = %e\n",a, dy[ppw->pv->index_pt_delta_cdm]);
@@ -9053,7 +9022,7 @@ int perturbations_derivs(double tau,
       dy[pv->index_pt_delta_g] = -4./3.*(theta_g+metric_continuity);
 
     }
-/**matter_perturbations:ecuaciones para bariones para ambos gauges */
+/**ACÁ matter_perturbations:ecuaciones para bariones para ambos gauges */
     /** - ---> baryon density */
 
     dy[pv->index_pt_delta_b] = -(theta_b+metric_continuity);
@@ -9208,6 +9177,15 @@ int perturbations_derivs(double tau,
     if (pba->has_cdm == _TRUE_) {
 
       /** - ----> newtonian gauge: cdm density and velocity */
+
+      /**ACÁ ecuación: metric_continuity = -3.*pvecmetric[ppw->index_mt_phi_prime]; EN GAUGE NEWTONIANO */
+
+      /** ACÁ COPIO equation for phi'(solo para verla) */
+      /** ppw->pvecmetric[ppw->index_mt_phi_prime]
+       *  = -a_prime_over_a * ppw->pvecmetric[ppw->index_mt_psi] + 1.5 * (a2/k2) * ppw->rho_plus_p_theta; */
+      
+      /* ACÁ tengo el write file CLAVE. Se guarda en la carpeta desde donde corras el CLASS.
+      si lo corres desde python, se guarda donde está ese archivo. hay que eliminarlo para sobrescribirlo*/
 
       if (ppt->gauge == newtonian) {
         dy[pv->index_pt_delta_cdm] = -(y[pv->index_pt_theta_cdm]+metric_continuity); /*acá cdm density delta_prima en el gauge newtoniano */
