@@ -8489,7 +8489,7 @@ int perturbations_print_variables(double tau,
     class_store_double(dataptr, theta_idr, pba->has_idr, storeidx);
     if ((pba->has_idr==_TRUE_) && (ppt->idr_nature == idr_free_streaming))
       class_store_double(dataptr, shear_idr, _TRUE_, storeidx);
-    /* Cold dark matter */ /*acá agrego delta_prime_cdm*/
+    /* Cold dark matter */ /*acá almaceno delta_prime_cdm*/
     class_store_double(dataptr, delta_cdm, pba->has_cdm, storeidx);
     class_store_double(dataptr, theta_cdm, pba->has_cdm, storeidx);
     class_store_double(dataptr, delta_prime_cdm, pba->has_cdm, storeidx); /*acá*/
@@ -9022,7 +9022,7 @@ int perturbations_derivs(double tau,
       dy[pv->index_pt_delta_g] = -4./3.*(theta_g+metric_continuity);
 
     }
-/**ACÁ matter_perturbations:ecuaciones para bariones para ambos gauges */
+/**ACÁ matter_perturbations:ecuaciones para bariones para ambos gauges. acá están las ecuaciones */
     /** - ---> baryon density */
 
     dy[pv->index_pt_delta_b] = -(theta_b+metric_continuity);
@@ -9203,7 +9203,7 @@ int perturbations_derivs(double tau,
       /** - ----> synchronous gauge: cdm density only (velocity set to zero by definition of the gauge) */
 
       if (ppt->gauge == synchronous) {
-        dy[pv->index_pt_delta_cdm] = -metric_continuity; /* acá cdm density  delta_prima_cdm en gauge sincrono*/ 
+        dy[pv->index_pt_delta_cdm] = -metric_continuity; /* acá cdm density  delta_prima_cdm en gauge sincrono (no el nuestro)*/ 
       }
     }
 

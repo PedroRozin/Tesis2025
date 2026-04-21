@@ -1,0 +1,16 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "python.defaultInterpreterPath": "./venv/bin/python"
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "ms-python.pylint"
+        ]
+    }
+}

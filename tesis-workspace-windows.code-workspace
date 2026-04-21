@@ -1,0 +1,79 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        // Configuración para Anaconda en Windows
+        // Ajusta la ruta según donde tengas instalado Anaconda
+        // Ejemplo común: C:\\Users\\TuUsuario\\anaconda3\\python.exe
+        // o C:\\ProgramData\\Anaconda3\\python.exe
+        "python.defaultInterpreterPath": "C:\\Users\\${env:USERNAME}\\anaconda3\\python.exe",
+        
+        // Configuración de terminal para Windows
+        "terminal.integrated.defaultProfile.windows": "Command Prompt",
+        
+        // Configuración alternativa si usas PowerShell
+        // "terminal.integrated.defaultProfile.windows": "PowerShell",
+        
+        // Paths adicionales para Python
+        "python.analysis.extraPaths": [
+            "${workspaceFolder}\\python"
+        ],
+        
+        // Configuración de testing
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        
+        // Linting
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        
+        // Formateo
+        "python.formatting.provider": "autopep8",
+        
+        // Auto-activar environment
+        "python.terminal.activateEnvironment": true,
+        
+        // Configuración de Pylance
+        "python.analysis.typeCheckingMode": "basic",
+        "python.analysis.autoImportCompletions": true,
+        
+        // Configuración de archivos
+        "files.eol": "\r\n",  // Line endings de Windows
+        "files.encoding": "utf8"
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "ms-python.vscode-pylance",
+            "ms-python.pylint",
+            "ms-toolsai.jupyter",
+            "ms-toolsai.jupyter-keymap",
+            "ms-toolsai.jupyter-renderers"
+        ]
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Python: Current File",
+                "type": "python",
+                "request": "launch",
+                "program": "${file}",
+                "console": "integratedTerminal",
+                "justMyCode": true
+            },
+            {
+                "name": "Python: Current File with Arguments",
+                "type": "python",
+                "request": "launch",
+                "program": "${file}",
+                "console": "integratedTerminal",
+                "args": [],
+                "justMyCode": true
+            }
+        ]
+    }
+}
