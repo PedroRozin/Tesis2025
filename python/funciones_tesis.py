@@ -7,6 +7,68 @@ from itertools import product
 from tqdm import tqdm
 from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
+import torch
+import torch.nn as nn
+
+#%% Red Neuronal
+
+class RegressionNN(nn.Module):
+    """ Neural network for regression with 4 input features and 2 output targets.
+        Está pensada originalmente para que los features sean: a, Omega_m, kh (o k solo), h y los targets delta_m y delta_prime_m.
+        Architecture:
+        - Input layer: 4 neurons (features)
+        - Hidden layers: 4 layers with 128 neurons each, ReLU activation
+        - Hidden layer: 1 layer with 64 neurons, ReLU activation
+        - Output layer: 2 neurons (targets)
+        """
+    def __init__(self):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(4, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2)   # salida de 2 targets
+        )
+        
+    def forward(self, x):
+        return self.network(x)
+    
+class ImprovedRegressionNN(nn.Module):
+    def __init__(self, activation='tanh'):
+        super().__init__()
+        
+        if activation == 'tanh':
+            act_fn = nn.Tanh()
+        elif activation == 'relu':
+            act_fn = nn.ReLU()
+        elif activation == 'gelu':
+            act_fn = nn.GELU()
+        
+        self.network = nn.Sequential(
+            nn.Linear(4, 128),
+            act_fn,
+            nn.Linear(128, 128),
+            act_fn,
+            nn.Linear(128, 128),
+            act_fn,
+            nn.Linear(128, 128),
+            act_fn,
+            nn.Linear(128, 64),
+            act_fn,
+            nn.Linear(64, 2)
+        )
+        
+    def forward(self, x):
+        return self.network(x)
+
+
 
 #%% Func. generales
 
@@ -33,16 +95,21 @@ def compute_delta_m(delta_cdm, delta_b, omega_cdm, omega_b):
 def k_horizon(a_ini=.01, omega_m=0.3, omega_r=9.1e-5, c=299792458):
   """Calculate the comoving horizon scale dados los omegas que le pongamos y el a_ini.
   Returns:
-    float: The comoving horizon scale in Mpc.
+    float: The comoving horizon scale in h/Mpc (multiply by h in case its needed).
   """
   omega_l= 1-omega_m-omega_r
   k_val = 2 * np.pi * a_ini * 100 / c * np.sqrt(omega_m / a_ini**3 + omega_r / a_ini**4 + omega_l)
   return k_val
 
-def deriv_tau_to_a(df, column_name='delta_dot_cdm'):
+def deriv_tau_to_a(df: pd.DataFrame, column_name='delta_dot_cdm')-> pd.DataFrame:
     """
     apply chain rule to convert tau to a.
     d delta/da = d delta/dtau * d tau/da = dot(delta)/(H a)
+    Args:
+        df (DataFrame): DataFrame containing the data.
+        column_name (str): Name of the column to convert. Default is 'delta_dot_cdm'.
+    Returns:
+        DataFrame: DataFrame with the new column added.
     """
     # Make a copy to avoid SettingWithCopyWarning
     df = df.copy()
@@ -114,7 +181,7 @@ def common_settings(k=0.01, omega_m=.3, A_s=2.e-9, h=0.68):
     'output': 'mPk',
     'k_output_values': k,
     'h': h,
-    # 'Omega_b': 0.3-omega_cdm,
+    # 'Omega_b': omega_m/6,
     # 'Omega_cdm': omega_cdm,
     'Omega_m': omega_m,
     'A_s': A_s,

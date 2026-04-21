@@ -14,6 +14,9 @@ setup(
         "matplotlib",
         "scipy",
         "tqdm",
+        "joblib",
+        "torch",
+        "sklearn",
         "classy"  # Si tienes CLASS instalado
     ],
     python_requires=">=3.8",

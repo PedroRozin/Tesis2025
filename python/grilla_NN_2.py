@@ -14,7 +14,7 @@ from funciones_tesis import RegressionNN
 import os
 
 path_folder = '/home/pedrorozin/scripts/outputs_pedro/neural_networks/'
-n = 'red_para_javi'
+n = 'red_densa_sin_As'
 
 if os.path.exists(path_folder + n):
     raise FileExistsError(f"El directorio {path_folder}/{n} ya existe.")
@@ -26,12 +26,14 @@ if not os.path.exists(path_folder + n):
 # ===========================
 # 1. load data y split and scale
 # ===========================
-path_grilla = '/home/pedrorozin/scripts/outputs_pedro/grillas/sin_As/grilla_results_no_As.csv'
+path_grilla = '/home/pedrorozin/scripts/outputs_pedro/grillas/sin_As_densa/grilla_results_no_As_densa.csv'
 df = pd.read_csv(path_grilla)
 
 # Features y targets
 # features = df[["a", "A_s", "k h", "h", "Omega_m", "sigma8"]].values
-features = df[["a", "k h", "h", "Omega_m"]].values
+# features = df[["a", "k h", "h", "Omega_m"]].values
+#filter features with k h < 0.2
+features = df[["a", "k h", "h", "Omega_m"]][df['k h'] < 0.21].values
 # targets = df[["delta_m", "delta_prime_m", "sigma8"]].values
 targets = df[["delta_m", "delta_prime_m"]].values
 
@@ -77,7 +79,7 @@ model = RegressionNN() #está en funciones_tesis.py
 # 3. loss function y optimizador
 # ===========================
 criterion = nn.MSELoss()
-lr = 5e-4
+lr = 1e-3
 optimizer = optim.Adam(model.parameters(), lr=lr)
 
 # ===========================
@@ -154,7 +156,7 @@ r2_targets = r2_score(y_true_phys, y_pred_phys, multioutput="raw_values")
 with open(f"{path_folder}/{n}/final_metrics_{n}.csv", "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["Target", "MAE", "R2"])
-    for name, mae, r2 in zip(["delta_m", "delta_prime_m", "sigma8"], mae_targets, r2_targets):
+    for name, mae, r2 in zip(["delta_m", "delta_prime_m"], mae_targets, r2_targets):
         writer.writerow([name, mae, r2])
 
 with open(f"{path_folder}/{n}/training_history_{n}.csv", "w", newline="") as f:

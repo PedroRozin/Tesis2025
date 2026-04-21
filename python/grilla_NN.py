@@ -35,7 +35,7 @@ print(f"🎯 Dispositivo seleccionado: {device}")
 print("="*50)
 
 path_folder = '/home/pedrorozin/scripts/outputs_pedro/neural_networks/'
-n = 'tanh'
+n = 'tanh_buena_v2'
 
 if os.path.exists(path_folder + n):
     raise FileExistsError(f"El directorio {path_folder}/{n} ya existe.")
@@ -47,7 +47,7 @@ if not os.path.exists(path_folder + n):
 # ===========================
 # 1. load data y split and scale
 # ===========================
-path_grilla = '/home/pedrorozin/scripts/outputs_pedro/grillas/sin_As_densa/grilla_results_no_As_densa.csv'
+path_grilla = '/home/pedrorozin/scripts/outputs_pedro/grillas/params_para_entrenamiento_v1/grilla_results_para_entrenamiento.csv'
 df_grilla = pd.read_csv(path_grilla)
 mask = (df_grilla['k h'] < 0.21) & (df_grilla['a'] < 0.035) #importante para que no entrene en puntos poco densos
 df = df_grilla[mask].copy()
@@ -55,13 +55,14 @@ df = df_grilla[mask].copy()
 # Features y targets
 # features = df[["a", "A_s", "k h", "h", "Omega_m", "sigma8"]].values
 # features = df[["a", "k h", "h", "Omega_m"]].values
-#filter features with k h < 0.2
-features = df[["a", "k h", "h", "Omega_m"]][df['k h'] < 0.21].values
+#filter features with k h <= 0.25
+features = df[["a", "k h", "h", "Omega_m"]][df['k h'] <= 0.25].values
 # targets = df[["delta_m", "delta_prime_m", "sigma8"]].values
 targets = df[["delta_m", "delta_prime_m"]].values
 
 # División aleatoria ANTES de escalar para evitar data leakage
-# Usamos un random_state fijo para reproducibilidad
+
+
 X_train, X_val, y_train, y_val = train_test_split(
     features, targets, 
     test_size=0.2, 
@@ -115,7 +116,7 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     mode='min',           # Minimizar val_loss
     factor=0.6,          # reduce LR por este factor
     patience=15,         # Esperar 15 epochs sin mejora
-    min_lr=1e-6          # LR mínimo
+    min_lr=1e-7          # LR mínimo
 )
 
 # Early stopping
@@ -127,7 +128,7 @@ best_model_state = None
 # ===========================
 # 4. training
 # ===========================
-epochs = 400
+epochs = 800
 train_losses, val_losses = [], []
 lr_history = []  # Para guardar el historial del learning rate
 
