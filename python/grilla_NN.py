@@ -29,9 +29,9 @@ if torch.cuda.is_available():
 
 else:
     device = torch.device('cpu')
-    print("⚠️  GPU no disponible, usando CPU")
+    print(" GPU no disponible, usando CPU")
 print(' ')
-print(f"🎯 Dispositivo seleccionado: {device}")
+print(f" Dispositivo seleccionado: {device}")
 print("="*50)
 
 path_folder = '/home/pedrorozin/scripts/outputs_pedro/neural_networks/'
@@ -53,15 +53,13 @@ mask = (df_grilla['k h'] < 0.21) & (df_grilla['a'] < 0.035) #importante para que
 df = df_grilla[mask].copy()
 
 # Features y targets
-# features = df[["a", "A_s", "k h", "h", "Omega_m", "sigma8"]].values
-# features = df[["a", "k h", "h", "Omega_m"]].values
-#filter features with k h <= 0.25
+
+#filter features with k h <= 0.25 (no lineal regime)
 features = df[["a", "k h", "h", "Omega_m"]][df['k h'] <= 0.25].values
 # targets = df[["delta_m", "delta_prime_m", "sigma8"]].values
 targets = df[["delta_m", "delta_prime_m"]].values
 
-# División aleatoria ANTES de escalar para evitar data leakage
-
+# División aleatoria ANTES de escalar
 
 X_train, X_val, y_train, y_val = train_test_split(
     features, targets, 
@@ -70,10 +68,10 @@ X_train, X_val, y_train, y_val = train_test_split(
     shuffle=True
 )
 
-# Escalamos usando SOLO los datos de entrenamiento
+# scaleo usando SOLO los datos de entrenamiento
 # scaler_X = StandardScaler()
 # scaler_y = StandardScaler()
-scaler_X = RobustScaler()
+scaler_X = RobustScaler() #escalea con la mediana y el IQR
 scaler_y = RobustScaler()
 
 X_train_scaled = scaler_X.fit_transform(X_train)
@@ -101,13 +99,13 @@ val_loader = DataLoader(val_dataset, batch_size=128)
 
 # model = RegressionNN() #está en funciones_tesis.py
 model = ImprovedRegressionNN(activation='tanh').to(device)
-print(f"🧠 Modelo movido a: {next(model.parameters()).device}")
+print(f" Modelo movido a: {next(model.parameters()).device}")
 
 # ===========================
 # 3. loss function y optimizador
 # ===========================
 criterion = nn.MSELoss()
-LR = 1e-3
+LR = 1e-3 #LR inicial, después se va ajustando
 optimizer = optim.Adam(model.parameters(), lr=LR)
 
 # Learning rate scheduler
@@ -292,6 +290,9 @@ with open(f"{path_folder}/{n}/info_{n}.txt", "w") as f:
 torch.save(model.state_dict(), f"{path_folder}/{n}/regression_model_{n}.pth")
 joblib.dump(scaler_X, f"{path_folder}/{n}/scaler_X_{n}.pkl")
 joblib.dump(scaler_y, f"{path_folder}/{n}/scaler_y_{n}.pkl")
+
+
+#print final summary
 
 print("="*60)
 print(f"🚀 ENTRENAMIENTO COMPLETADO - Red: {n}")
